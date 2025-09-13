@@ -1,86 +1,118 @@
+// src/scanners/semgrep.ts
 import { execFile } from 'node:child_process';
-import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-function candidateSemgrepBins() {
-  const home = os.homedir();
-  return [
-    'semgrep',
-    path.join(home, '.local', 'bin', 'semgrep'),
-    path.join(home, '.local', 'share', 'pipx', 'venvs', 'semgrep', 'bin', 'semgrep'),
-  ];
-}
-
-type RunOpts = {
-  timeoutSec?: number;      // límite por ejecución
-  signal?: AbortSignal;     // para cancelar desde fuera
+export type RunOpts = {
+  timeoutSec?: number;
+  signal?: AbortSignal;
+  onDebug?: (msg: string) => void;
 };
 
-// (A) Escaneo de un directorio completo (compat)
-export async function runSemgrep(
-  targetDir: string,
-  config: string | string[] = 'p/owasp-top-ten',
-  opts: RunOpts = {}
-): Promise<any[]> {
-  const bins = candidateSemgrepBins().filter(p => p === 'semgrep' || fs.existsSync(p));
-  const cfgs = Array.isArray(config) ? config : [config];
-  const tryOne = (bin: string) =>
-    new Promise<any[]>((resolve, reject) => {
-      const args = [
-        ...cfgs.flatMap(c => ['--config', c]),
-        '--metrics', 'off',
-        '--json',
-        targetDir
-      ];
-      execFile(
-        bin,
-        args,
-        { maxBuffer: 100_000_000, timeout: (opts.timeoutSec ?? 60) * 1000, signal: opts.signal },
-        (err, stdout, stderr) => {
-          if (err && !stdout) return reject(new Error((stderr || err.message || 'semgrep failed').toString()));
-          try { resolve((JSON.parse(stdout || '{}').results) || []); }
-          catch { reject(new Error('Failed to parse semgrep JSON')); }
-        }
-      );
-    });
-
-  let lastErr: any;
-  for (const bin of bins) { try { return await tryOne(bin); } catch (e) { lastErr = e; } }
-  throw lastErr ?? new Error('Unable to execute semgrep (not found in PATH)');
-}
-
-// (B) Escaneo por LOTES de archivos concretos (para progreso real) este me gusta mas
+/** Ejecuta Semgrep sobre una lista de archivos (absolutos). Devuelve "results" del JSON. */
 export async function runSemgrepOnFiles(
   files: string[],
-  config: string | string[] = 'p/owasp-top-ten',
+  configs: string[],
   opts: RunOpts = {}
 ): Promise<any[]> {
-  if (!files.length) return [];
-  const bins = candidateSemgrepBins().filter(p => p === 'semgrep' || fs.existsSync(p));
-  const cfgs = Array.isArray(config) ? config : [config];
+  if (!files.length) {
+    return [];
+  }
+  const bin = await resolveSemgrepBin();
+  const timeoutSec = Math.max(10, opts.timeoutSec ?? 60);
 
-  const tryOne = (bin: string) =>
-    new Promise<any[]>((resolve, reject) => {
-      const args = [
-        ...cfgs.flatMap(c => ['--config', c]),
-        '--metrics', 'off',
-        '--json',
-        ...files
-      ];
-      execFile(
-        bin,
-        args,
-        { maxBuffer: 100_000_000, timeout: (opts.timeoutSec ?? 60) * 1000, signal: opts.signal },
-        (err, stdout, stderr) => {
-          if (err && !stdout) return reject(new Error((stderr || err.message || 'semgrep failed').toString()));
-          try { resolve((JSON.parse(stdout || '{}').results) || []); }
-          catch { reject(new Error('Failed to parse semgrep JSON')); }
+  const args: string[] = [
+    '--json',
+    '--quiet',
+    `--timeout=${timeoutSec}`,
+    '--metrics=off',
+  ];
+  for (const c of configs) {
+    args.push('--config', c);
+  }
+  args.push(...files);
+
+  opts.onDebug?.(`[semgrep] exec: ${bin} ${args.join(' ')}`);
+
+  const { stdout } = await execFileAsync(bin, args, { signal: opts.signal });
+  let parsed: any;
+  try {
+    parsed = JSON.parse(stdout || '{}');
+  } catch {
+    parsed = {};
+  }
+  const results: any[] = Array.isArray(parsed.results) ? parsed.results : [];
+  opts.onDebug?.(`[semgrep] results: ${results.length}`);
+  return results;
+}
+
+/* ---------- helpers ---------- */
+
+function toText(x: unknown): string {
+  if (typeof x === 'string') return x;
+  try {
+    // Buffer u otros objetos con toString
+    return (x as any)?.toString?.('utf8') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function execFileAsync(
+  cmd: string,
+  args: string[],
+  opt: { signal?: AbortSignal }
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const cp = execFile(
+      cmd,
+      args,
+      { maxBuffer: 50 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = toText(stderr) || (err as any)?.message || String(err);
+          return reject(new Error(msg));
         }
-      );
-    });
+        resolve({ stdout: toText(stdout), stderr: toText(stderr) });
+      }
+    );
 
-  let lastErr: any;
-  for (const bin of bins) { try { return await tryOne(bin); } catch (e) { lastErr = e; } }
-  throw lastErr ?? new Error('Unable to execute semgrep (not found in PATH)');
+    if (opt?.signal) {
+      opt.signal.addEventListener(
+        'abort',
+        () => {
+          cp.kill('SIGTERM');
+        },
+        { once: true }
+      );
+    }
+  });
+}
+
+async function resolveSemgrepBin(): Promise<string> {
+  const candidates = [
+    'semgrep',
+    path.join(os.homedir(), '.local', 'bin', 'semgrep'),
+    path.join(
+      os.homedir(),
+      '.local',
+      'share',
+      'pipx',
+      'venvs',
+      'semgrep',
+      'bin',
+      'semgrep'
+    ),
+  ];
+  for (const c of candidates) {
+    try {
+      await execFileAsync(c, ['--version'], {});
+      return c;
+    } catch {
+      // sigue probando
+    }
+  }
+  throw new Error(
+    'Semgrep no encontrado. Instálalo con `pipx install semgrep` o añade al PATH.'
+  );
 }

@@ -5,14 +5,79 @@
   "version": "0.0.1",
   "engines": { "vscode": "^1.104.0" },
   "categories": ["Other"],
-
-  "activationEvents": ["onCommand:sec.scan"],
   "main": "./dist/extension.js",
+
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:secFindings",
+    "onCommand:sec.setup",
+    "onCommand:sec.scan",
+    "onCommand:sec.exportReport",
+    "onCommand:sec.toggleSeverity"
+  ],
 
   "contributes": {
     "commands": [
       { "command": "sec.scan", "title": "Security: Scan Workspace" },
-      { "command": "sec.exportReport", "title": "Security: Export Report (Markdown)" }
+      { "command": "sec.setup", "title": "VulnScan: Setup Wizard" },
+      { "command": "sec.exportReport", "title": "Security: Export Report (Markdown)" },
+      { "command": "sec.toggleSeverity", "title": "VulnScan: Set Minimum Severity" }
+    ],
+    "keybindings": [
+      {
+        "command": "sec.scan",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "sec.scan", "when": "true" },
+        { "command": "sec.setup", "when": "true" },
+        { "command": "sec.exportReport", "when": "true" },
+        { "command": "sec.toggleSeverity", "when": "true" }
+      ],
+      "explorer/context": [
+        { "command": "sec.scan", "group": "navigation@50" },
+        { "command": "sec.exportReport", "group": "navigation@51" },
+        { "command": "sec.setup", "group": "navigation@52" }
+      ]
+    },
+    "views": {
+      "explorer": [
+        { "id": "secFindings", "name": "Security Findings" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "secFindings",
+        "contents": "Bienvenido a **VulnScan**.\n\n- $(play) [Abrir asistente de configuración](command:sec.setup)\n- $(shield) [Escanear ahora](command:sec.scan)\n\nTambién disponible con `Ctrl/⌘+Alt+S`."
+      }
+    ],
+    "gettingStarted": [
+      {
+        "category": "vulnscan.gettingStarted",
+        "title": "VulnScan — Primeros pasos",
+        "description": "Configura Semgrep y tu API key en un minuto.",
+        "icon": "book",
+        "steps": [
+          {
+            "id": "vulnscan.step.setup",
+            "title": "Abrir el Setup Wizard",
+            "description": "Revisa Semgrep y guarda tu OPENAI_API_KEY en VS Code Secrets.",
+            "completionEvents": ["onCommand:sec.setup"],
+            "media": { "markdown": "Pulsa para abrir: [VulnScan: Setup Wizard](command:sec.setup)" }
+          },
+          {
+            "id": "vulnscan.step.scan",
+            "title": "Lanzar un escaneo",
+            "description": "Ejecuta un escaneo del workspace y abre el reporte.",
+            "completionEvents": ["onCommand:sec.scan"],
+            "media": { "markdown": "Pulsa para ejecutar: [Security: Scan Workspace](command:sec.scan)" }
+          }
+        ]
+      }
     ],
     "configuration": {
       "title": "VulnScan",
@@ -59,6 +124,11 @@
           "minimum": 1,
           "maximum": 8,
           "description": "Máximo de findings enriquecidos en paralelo."
+        },
+        "vulnscan.autoScanOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Si está activo, ejecuta un escaneo rápido al guardar archivos."
         }
       }
     }

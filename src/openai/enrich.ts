@@ -25,7 +25,7 @@ const SCHEMA_OBJECT: any = {
     tests_suggested: { type: "array", items: { type: "string" } },
     references: { type: "array", items: { type: "string" } }
   },
-  // 🔧 required debe incluir TODAS las claves de properties según la API
+  // required debe incluir TODAS las claves de properties según la API
   required: [
     "rule_id",
     "cwe",
@@ -78,7 +78,7 @@ No inventes APIs; referencia CWE/OWASP si aplica.`;
     }
   } as any); // cast por si los typings aún no recogen el shape nuevo
 
-  // Extracción robusta
+  // lo que saca
   const anyRes: any = res;
   const text =
     anyRes.output_text ??

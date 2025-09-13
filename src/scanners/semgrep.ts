@@ -50,7 +50,7 @@ export async function runSemgrep(
   throw lastErr ?? new Error('Unable to execute semgrep (not found in PATH)');
 }
 
-// (B) Escaneo por LOTES de archivos concretos (para progreso real)
+// (B) Escaneo por LOTES de archivos concretos (para progreso real) este me gusta mas
 export async function runSemgrepOnFiles(
   files: string[],
   config: string | string[] = 'p/owasp-top-ten',

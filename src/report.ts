@@ -1,4 +1,3 @@
-// src/report.ts
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 
@@ -30,24 +29,9 @@ export function openSecurityReport(
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
-  // Agrupar por archivo
-  const byFile = new Map<string, UIItem[]>();
-  for (const it of items) {
-    const arr = byFile.get(it.relFile) ?? [];
-    arr.push(it);
-    byFile.set(it.relFile, arr);
-  }
-
-  // Stats
+  const byFile = groupByFile(items);
   const total = items.length;
-  const sev = (s: UIItem['severity']) => items.filter(i => i.severity === s).length;
-  const stats = {
-    critical: sev('critical'),
-    high: sev('high'),
-    medium: sev('medium'),
-    low: sev('low'),
-    info: sev('info')
-  };
+  const stats = countSev(items);
 
   panel.webview.html = htmlReport(byFile, stats, total);
 
@@ -58,7 +42,6 @@ export function openSecurityReport(
         : path.join(workspaceRoot, msg.file);
       const doc = await vscode.workspace.openTextDocument(abs);
       const editor = await vscode.window.showTextDocument(doc, { preview: false });
-      // Selección y revelado
       const line = Math.max(0, Number(msg.line) || 0);
       const col = Math.max(0, Number(msg.col) || 0);
       const pos = new vscode.Position(line, col);
@@ -66,6 +49,63 @@ export function openSecurityReport(
       editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
     }
   });
+}
+
+export function renderMarkdown(items: UIItem[]): string {
+  const byFile = groupByFile(items);
+  const stats = countSev(items);
+  const total = items.length;
+
+  const header =
+`# Security Report
+
+**Total:** ${total}
+**Critical:** ${stats.critical} · **High:** ${stats.high} · **Medium:** ${stats.medium} · **Low:** ${stats.low} · **Info:** ${stats.info}
+
+---
+
+`;
+
+  const blocks = Array.from(byFile.entries()).map(([file, arr]) => {
+    const entries = arr.map(i => {
+      const line = i.range.start.line + 1;
+      const chips = [
+        i.cwe ? `CWE: ${i.cwe}` : null,
+        i.owasp ? `OWASP: ${i.owasp}` : null,
+      ].filter(Boolean).join(' · ');
+      const exp = i.explanation_md ? `\n\n**Explanation**\n\n${i.explanation_md}` : '';
+      const snip = i.snippet ? `\n\n**Snippet**\n\n\`\`\`\n${i.snippet}\n\`\`\`\n` : '';
+      const diff = i.unified_diff ? `\n\n**Fix (diff)**\n\n\`\`\`diff\n${i.unified_diff}\n\`\`\`\n` : '';
+      return `### [${i.severity.toUpperCase()}] ${i.ruleId}\n**Location:** \`${file}:${line}\`\n\n${i.message}\n\n${chips}${exp}${snip}${diff}`;
+    }).join('\n\n---\n\n');
+
+    return `## ${file}  \n_${arr.length} findings_\n\n${entries}`;
+  }).join('\n\n---\n\n');
+
+  return header + blocks + '\n';
+}
+
+/* ---------- helpers (privados) ---------- */
+
+function groupByFile(items: UIItem[]) {
+  const byFile = new Map<string, UIItem[]>();
+  for (const it of items) {
+    const arr = byFile.get(it.relFile) ?? [];
+    arr.push(it);
+    byFile.set(it.relFile, arr);
+  }
+  return byFile;
+}
+
+function countSev(items: UIItem[]) {
+  const sev = (s: UIItem['severity']) => items.filter(i => i.severity === s).length;
+  return {
+    critical: sev('critical'),
+    high: sev('high'),
+    medium: sev('medium'),
+    low: sev('low'),
+    info: sev('info')
+  };
 }
 
 function colorFor(sev: UIItem['severity']) {
@@ -84,7 +124,7 @@ function escapeHtml(s: string) {
 
 function htmlReport(byFile: Map<string, UIItem[]>, stats: any, total: number) {
   const fileBlocks = Array.from(byFile.entries()).map(([file, arr]) => {
-    const rows = arr.map((i, idx) => {
+    const rows = arr.map((i) => {
       const sevColor = colorFor(i.severity);
       const cwe = i.cwe ? `<span class="chip">CWE: ${escapeHtml(i.cwe)}</span>` : '';
       const owasp = i.owasp ? `<span class="chip">OWASP: ${escapeHtml(i.owasp)}</span>` : '';
@@ -99,9 +139,7 @@ function htmlReport(byFile: Map<string, UIItem[]>, stats: any, total: number) {
             <button class="open" data-file="${escapeHtml(i.file)}" data-line="${i.range.start.line}" data-col="${i.range.start.col}">Abrir en editor</button>
           </div>
           <div class="msg">${escapeHtml(i.message)}</div>
-          <div class="chips">
-            ${cwe} ${owasp}
-          </div>
+          <div class="chips">${cwe} ${owasp}</div>
           ${i.explanation_md ? `<details open><summary>Explicación</summary><div class="md">${escapeHtml(i.explanation_md)}</div></details>` : ''}
           ${snippet}
           ${diff}
@@ -122,7 +160,7 @@ function htmlReport(byFile: Map<string, UIItem[]>, stats: any, total: number) {
   <head>
     <meta charset="UTF-8" />
     <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji'; margin: 0; padding: 16px; color: #eee; background: #1e1e1e; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial; margin: 0; padding: 16px; color: #eee; background: #1e1e1e; }
       h1 { margin: 0 0 12px 0; font-size: 18px; }
       .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
       .badge { padding: 6px 10px; border-radius: 999px; font-weight: 600; }

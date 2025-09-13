@@ -11,12 +11,56 @@
 
   "contributes": {
     "commands": [
-      { "command": "sec.scan", "title": "Security: Scan Workspace" }
+      { "command": "sec.scan", "title": "Security: Scan Workspace" },
+      { "command": "sec.exportReport", "title": "Security: Export Report (Markdown)" }
     ],
-    "views": {
-      "explorer": [
-        { "id": "secFindings", "name": "Security Findings" }
-      ]
+    "configuration": {
+      "title": "VulnScan",
+      "properties": {
+        "vulnscan.targetDirectory": {
+          "type": "string",
+          "enum": ["auto", "app", "root"],
+          "default": "auto",
+          "description": "Qué carpeta escanear: 'auto' (usa app/ si existe), 'app' o 'root' (raíz del workspace)."
+        },
+        "vulnscan.minSeverity": {
+          "type": "string",
+          "enum": ["info", "low", "medium", "high", "critical"],
+          "default": "low",
+          "description": "Severidad mínima a mostrar (y enriquecer)."
+        },
+        "vulnscan.semgrep.configs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["p/owasp-top-ten", "p/ruby"],
+          "description": "Listado de configuraciones/reglas de Semgrep."
+        },
+        "vulnscan.batchSize": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "description": "Número de archivos por lote para mostrar progreso real."
+        },
+        "vulnscan.timeoutSec": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "description": "Timeout por ejecución de Semgrep (segundos)."
+        },
+        "vulnscan.allowedExtensions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [".rb", ".py", ".js", ".jsx", ".ts", ".tsx"],
+          "description": "Extensiones de archivo a analizar."
+        },
+        "vulnscan.enrich.concurrency": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Máximo de findings enriquecidos en paralelo."
+        }
+      }
     }
   },
 

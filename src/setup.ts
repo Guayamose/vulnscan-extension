@@ -1,8 +1,8 @@
+// src/setup.ts
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { getOpenAI } from './openai/client.js';
 
 const TOKEN_KEY = 'vulnscan/apiKey';
 
@@ -37,8 +37,9 @@ export async function openSetupWizard(ctx: vscode.ExtensionContext) {
   const cfg = vscode.workspace.getConfiguration('vulnscan');
   const currentMin = cfg.get<string>('minSeverity', 'low')!;
   const currentTarget = cfg.get<string>('targetDirectory', 'auto')!;
+  const currentLang = cfg.get<string>('enrich.language', 'es')!;
 
-  panel.webview.html = html(currentMin, currentTarget);
+  panel.webview.html = html(panel.webview, currentMin, currentTarget, currentLang);
 
   panel.webview.onDidReceiveMessage(async (msg) => {
     switch (msg.type) {
@@ -58,19 +59,15 @@ export async function openSetupWizard(ctx: vscode.ExtensionContext) {
         const key = String(msg.key || '').trim();
         if (!key) { vscode.window.showWarningMessage('Introduce una API key válida.'); break; }
         await ctx.secrets.store(TOKEN_KEY, key);
-        if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key; // para el cliente actual
+        if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
         vscode.window.showInformationMessage('OPENAI_API_KEY guardada en VS Code Secrets.');
         break;
       }
       case 'testAi': {
         try {
-          const client = getOpenAI(); // usa process.env.OPENAI_API_KEY
-          const r = await client.responses.create({
-            model: 'gpt-4.1-mini',
-            input: [{ role: 'user', content: 'pong' }]
-          } as any);
-          const ok = !!(r as any)?.output_text;
-          panel.webview.postMessage({ type: 'testAi:result', ok });
+          // Sin dependencias: basta con comprobar que hay API key
+          const ok = !!process.env.OPENAI_API_KEY;
+          panel.webview.postMessage({ type: 'testAi:result', ok, err: ok ? '' : 'API key no configurada' });
         } catch (e: any) {
           panel.webview.postMessage({ type: 'testAi:result', ok: false, err: e?.message || String(e) });
         }
@@ -90,11 +87,18 @@ export async function openSetupWizard(ctx: vscode.ExtensionContext) {
   });
 }
 
-function html(minSev: string, targetDir: string) {
+function nonce() { return Array.from({ length: 32 }, () => Math.random().toString(36)[2]).join(''); }
+
+function html(webview: vscode.Webview, minSev: string, targetDir: string, analysisLang: string) {
+  const n = nonce();
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; img-src ${webview.cspSource} https:;
+           style-src ${webview.cspSource} 'unsafe-inline';
+           script-src 'nonce-${n}';">
 <style>
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; color: #eaeaea; background: #1e1e1e; margin: 0; padding: 16px; }
   h1 { margin: 0 0 12px 0; font-size: 18px; }
@@ -103,8 +107,6 @@ function html(minSev: string, targetDir: string) {
   .row { display:flex; gap:8px; align-items:center; margin: 8px 0; }
   .btn { background: #0e639c; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
   .btn.secondary { background: #3a3a3a; }
-  .ok { color: #80e27e; font-weight:600; }
-  .bad { color: #ff6659; font-weight:600; }
   input[type="password"], select { background:#111; color:#eee; border:1px solid #2a2a2a; border-radius:6px; padding:8px; width:100%; }
   .footer { margin-top:16px; display:flex; gap:10px; }
 </style>
@@ -134,7 +136,7 @@ function html(minSev: string, targetDir: string) {
     <div class="card">
       <h3>3) Preferencias rápidas</h3>
       <div class="row">
-        <label>Minimum severity</label>
+        <label style="min-width:160px">Minimum severity</label>
         <select id="minSev">
           <option value="info">info</option>
           <option value="low">low</option>
@@ -144,11 +146,26 @@ function html(minSev: string, targetDir: string) {
         </select>
       </div>
       <div class="row">
-        <label>Target directory</label>
+        <label style="min-width:160px">Target directory</label>
         <select id="targetDir">
           <option value="auto">auto</option>
           <option value="app">app</option>
           <option value="root">root</option>
+        </select>
+      </div>
+      <div class="row">
+        <label style="min-width:160px">Language of analysis</label>
+        <select id="analysisLang">
+          <option value="auto">auto</option>
+          <option value="es">es</option>
+          <option value="en">en</option>
+          <option value="fr">fr</option>
+          <option value="de">de</option>
+          <option value="it">it</option>
+          <option value="pt">pt</option>
+          <option value="ja">ja</option>
+          <option value="ko">ko</option>
+          <option value="zh">zh</option>
         </select>
       </div>
     </div>
@@ -164,16 +181,14 @@ function html(minSev: string, targetDir: string) {
     <small>También puedes abrir este asistente desde la paleta: “VulnScan: Setup Wizard”.</small>
   </div>
 
-<script>
+<script nonce="${n}">
   const vscode = acquireVsCodeApi();
 
   function recheck() {
     document.getElementById('sgLabel').textContent = 'Checking…';
     vscode.postMessage({ type: 'checkSemgrep' });
   }
-  function install() {
-    vscode.postMessage({ type: 'installSemgrep' });
-  }
+  function install() { vscode.postMessage({ type: 'installSemgrep' }); }
   function saveKey() {
     const key = document.getElementById('apiKey').value;
     vscode.postMessage({ type: 'saveApiKey', key });
@@ -182,18 +197,17 @@ function html(minSev: string, targetDir: string) {
     document.getElementById('aiRes').textContent = 'Testing…';
     vscode.postMessage({ type: 'testAi' });
   }
-  function scanNow() {
-    vscode.postMessage({ type: 'scanNow' });
-  }
-  function setConfig(key, value) {
-    vscode.postMessage({ type: 'setConfig', key, value });
-  }
+  function scanNow() { vscode.postMessage({ type: 'scanNow' }); }
+  function setConfig(key, value) { vscode.postMessage({ type: 'setConfig', key, value }); }
 
   // init values
   document.getElementById('minSev').value = "${minSev}";
   document.getElementById('targetDir').value = "${targetDir}";
-  document.getElementById('minSev').addEventListener('change', e => setConfig('minSeverity', e.target.value));
-  document.getElementById('targetDir').addEventListener('change', e => setConfig('targetDirectory', e.target.value));
+  document.getElementById('analysisLang').value = "${analysisLang}";
+
+  document.getElementById('minSev').addEventListener('change', e => setConfig('vulnscan.minSeverity', e.target.value));
+  document.getElementById('targetDir').addEventListener('change', e => setConfig('vulnscan.targetDirectory', e.target.value));
+  document.getElementById('analysisLang').addEventListener('change', e => setConfig('vulnscan.enrich.language', e.target.value));
 
   // first checks
   recheck();
@@ -202,13 +216,13 @@ function html(minSev: string, targetDir: string) {
     const msg = ev.data;
     if (msg.type === 'checkSemgrep:result') {
       const el = document.getElementById('sgLabel');
-      if (msg.ok) el.innerHTML = '<span class="ok">Found</span> — ' + (msg.version || '');
-      else el.innerHTML = '<span class="bad">Not found</span> — ' + (msg.note || '');
+      if (msg.ok) el.innerHTML = '<span style="color:#80e27e;font-weight:600">Found</span> — ' + (msg.version || '');
+      else el.innerHTML = '<span style="color:#ff6659;font-weight:600">Not found</span> — ' + (msg.note || '');
     }
     if (msg.type === 'testAi:result') {
       const el = document.getElementById('aiRes');
-      if (msg.ok) el.innerHTML = '<span class="ok">OK</span>';
-      else el.innerHTML = '<span class="bad">Fail</span> — ' + (msg.err || '');
+      if (msg.ok) el.innerHTML = '<span style="color:#80e27e;font-weight:600">OK</span>';
+      else el.innerHTML = '<span style="color:#ff6659;font-weight:600">Fail</span> — ' + (msg.err || '');
     }
   });
 </script>

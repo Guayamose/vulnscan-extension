@@ -129,6 +129,12 @@
           "type": "boolean",
           "default": false,
           "description": "Si está activo, ejecuta un escaneo rápido al guardar archivos."
+        },
+        "vulnscan.enrich.language": {
+          "type": "string",
+          "enum": ["auto", "es", "en", "fr", "de", "it", "pt", "ja", "ko", "zh"],
+          "default": "es",
+          "description": "Idioma del análisis (salida de IA). 'auto' usa el locale de VS Code."
         }
       }
     }

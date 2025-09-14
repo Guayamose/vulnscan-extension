@@ -13,6 +13,7 @@ import { openSecurityReport, UIItem, renderMarkdown } from './report.js';
 import { openSetupWizard } from './setup.js';
 
 const TOKEN_KEY = 'vulnscan/apiKey';
+const IGNORED_KEY = 'vulnscan/ignored';
 const SEV_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 } as const;
 
 let lastReportItems: UIItem[] = [];
@@ -22,7 +23,6 @@ let statusSev: vscode.StatusBarItem;
 export async function activate(ctx: vscode.ExtensionContext) {
   console.log('[vulnscan] activated');
 
-  // 1) Cargar .env de la extensión y la API key desde Secrets → env
   try {
     const envPath = path.join(ctx.extensionPath, '.env');
     if (fs.existsSync(envPath)) dotenv.config({ path: envPath });
@@ -30,7 +30,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
   const secretKey = await ctx.secrets.get(TOKEN_KEY);
   if (secretKey && !process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = secretKey;
 
-  // 2) Status bar
   statusScan = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusScan.text = '$(shield) Scan';
   statusScan.tooltip = 'Security: Scan Workspace';
@@ -44,13 +43,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
   statusSev.show();
   ctx.subscriptions.push(statusSev);
 
-  // 3) Comandos
   ctx.subscriptions.push(vscode.commands.registerCommand('sec.setup', () => openSetupWizard(ctx)));
   ctx.subscriptions.push(vscode.commands.registerCommand('sec.toggleSeverity', setMinSeverity));
   ctx.subscriptions.push(vscode.commands.registerCommand('sec.exportReport', exportReport));
   ctx.subscriptions.push(vscode.commands.registerCommand('sec.scan', () => scanWorkspace(ctx)));
 
-  // 4) Auto-scan on save (opcional)
   const dispSave = vscode.workspace.onDidSaveTextDocument(async () => {
     const cfg = vscode.workspace.getConfiguration('vulnscan');
     if (cfg.get<boolean>('autoScanOnSave', false)) {
@@ -59,7 +56,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
   });
   ctx.subscriptions.push(dispSave);
 
-  // 5) Onboarding suave: si no hay key, abre Setup al arrancar
   void maybeShowSetup();
 }
 
@@ -99,16 +95,13 @@ async function exportReport() {
   vscode.window.showInformationMessage(`Reporte exportado a ${uri.fsPath}`);
 }
 
-/** Normaliza cualquier variante de severidad a nuestro set */
 type Sev = 'info'|'low'|'medium'|'high'|'critical';
 function normalizeSeverity(s: unknown): Sev {
   const u = String(s ?? '').toUpperCase();
   switch (u) {
-    // Semgrep típicos
     case 'INFO': return 'info';
-    case 'WARNING': return 'medium';
+    case 'WARNING': return 'medium'; // cámbialo a 'low' si lo prefieres
     case 'ERROR': return 'high';
-    // Otros posibles ya normalizados
     case 'LOW': return 'low';
     case 'MEDIUM': return 'medium';
     case 'HIGH': return 'high';
@@ -121,7 +114,6 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) { return vscode.window.showErrorMessage('Open a folder first.'); }
 
-  // Cargar settings
   const cfg = vscode.workspace.getConfiguration('vulnscan');
   const targetDirectory = cfg.get<string>('targetDirectory', 'auto');
   const minSeverity = cfg.get<'info'|'low'|'medium'|'high'|'critical'>('minSeverity', 'low');
@@ -132,13 +124,13 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
   const enrichConcurrency = Math.min(8, Math.max(1, cfg.get<number>('enrich.concurrency', 3)));
   const hasKey = !!process.env.OPENAI_API_KEY;
 
-  const appDir = path.join(workspaceRoot, 'app');
+  let analysisLanguage = cfg.get<string>('enrich.language', 'es')!;
+  if (analysisLanguage === 'auto') analysisLanguage = (vscode.env.language || 'en').slice(0, 2);
 
-  // Canal de salida + LOGS CLAROS
+  const appDir = path.join(workspaceRoot, 'app');
   const out = vscode.window.createOutputChannel('Security');
   out.clear();
 
-  // Resolve del target con fallback y logs
   let targetRoot: string;
   if (targetDirectory === 'app') {
     if (fs.existsSync(appDir)) {
@@ -160,18 +152,13 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
   out.show(true);
 
   await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `VulnScan: scanning ${path.basename(targetRoot)}/ …`,
-      cancellable: true
-    },
+    { location: vscode.ProgressLocation.Notification, title: `VulnScan: scanning ${path.basename(targetRoot)}/ …`, cancellable: true },
     async (progress, token) => {
       try {
         clearDiagnostics();
         statusScan.text = '$(sync~spin) Scanning…';
         progress.report({ message: 'indexing files…', increment: 0 });
 
-        // 1) Enumerar archivos y filtrar por extensión
         const allFiles = await enumerateFiles(targetRoot, defaultExcludes(), token);
         const targetFiles = allFiles.filter(f => allowedExtensions.has(path.extname(f)));
         if (token.isCancellationRequested) return;
@@ -184,14 +171,12 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
           return;
         }
 
-        // 2) Escanear por lotes con progreso real
         const findingsRaw: any[] = [];
         const total = targetFiles.length;
         let done = 0;
 
         for (let i = 0; i < total; i += batchSize) {
           if (token.isCancellationRequested) break;
-
           const batch = targetFiles.slice(i, i + batchSize);
           const aborter = new AbortController();
           token.onCancellationRequested(() => aborter.abort());
@@ -204,59 +189,77 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
             onDebug: (m) => out.appendLine(m)
           });
           findingsRaw.push(...raw);
-
           done += batch.length;
+
           out.appendLine(`Batch ${Math.floor(i / batchSize) + 1}: files=${batch.length}, semgrepResults=${raw.length}`);
           const pct = Math.min(100, Math.round((done / total) * 100));
           progress.report({ message: `scanned ${done}/${total} files`, increment: pct });
         }
 
-        // 3) Normalizar, forzar severidad al set conocido y publicar diagnostics
         const mapped: Finding[] = findingsRaw.map(fromSemgrep).map(f => ({
           ...f,
           severity: normalizeSeverity((f as any).severity)
         }));
 
-        // Histograma de severidades para depurar
+        // Aplicar ignore list
+        const ignored = new Set(ctx.workspaceState.get<string[]>(IGNORED_KEY, []));
+        const filteredForDiagnostics = mapped.filter(f => !ignored.has(f.fingerprint));
         const hist: Record<string, number> = {};
-        for (const m of mapped) hist[m.severity] = (hist[m.severity] || 0) + 1;
-        out.appendLine(`Severities after map: ${Object.entries(hist).map(([k,v]) => `${k}:${v}`).join(', ') || 'none'}`);
+        for (const m of filteredForDiagnostics) hist[m.severity] = (hist[m.severity] || 0) + 1;
+        out.appendLine(`Severities after map (ignored filtered out): ${Object.entries(hist).map(([k,v]) => `${k}:${v}`).join(', ') || 'none'}`);
 
-        const findings = mapped.filter(f => SEV_RANK[f.severity] >= SEV_RANK[minSeverity]);
+        const findings = filteredForDiagnostics.filter(f => SEV_RANK[f.severity] >= SEV_RANK[minSeverity]);
         for (const f of findings) { f.snippet = await getSnippet(f.file, f.range); }
         publishFindings(findings);
 
-        // 4) Enriquecimiento (concurrencia limitada) + preparar reporte
         out.appendLine(`Findings (>= ${minSeverity}): ${findings.length}`);
 
         const reportItems: UIItem[] = [];
-
         if (hasKey && findings.length > 0 && !token.isCancellationRequested) {
           await pLimit(enrichConcurrency, findings.map((f, idx) => async () => {
             if (token.isCancellationRequested) return;
             const loc = `${f.file}:${f.range.start.line + 1}`;
             out.appendLine(`\n[${idx + 1}/${findings.length}] Enriching ${f.ruleId} @ ${loc} …`);
             try {
-              const enriched = await enrichFinding(detectLang(f.file), f);
-              out.appendLine(enriched?.explanation_md || '(no explanation)');
-              reportItems.push(toUIItem(f, enriched?.explanation_md ?? '', enriched?.fix?.unified_diff ?? null, enriched?.cwe ?? f.cwe, enriched?.owasp ?? f.owasp));
+              const enriched = await enrichFinding(detectLang(f.file), f, analysisLanguage);
+              reportItems.push(toUIItem(f, {
+                explanation_md: enriched?.explanation_md ?? '',
+                unified_diff: enriched?.fix?.unified_diff ?? null,
+                calibrated: enriched?.severity_calibrated ?? null,
+                confidence: typeof enriched?.confidence === 'number' ? enriched.confidence : null,
+                references: Array.isArray(enriched?.references) ? enriched.references : [],
+                tests: Array.isArray(enriched?.tests_suggested) ? enriched.tests_suggested : [],
+                cwe: enriched?.cwe ?? f.cwe,
+                owasp: enriched?.owasp ?? f.owasp
+              }));
             } catch (e: any) {
               out.appendLine(`❌ AI enrich error: ${e?.message || e}`);
-              reportItems.push(toUIItem(f, '', null, f.cwe, f.owasp));
+              reportItems.push(toUIItem(f, {
+                explanation_md: '',
+                unified_diff: null,
+                calibrated: null,
+                confidence: null,
+                references: [],
+                tests: [],
+                cwe: f.cwe, owasp: f.owasp
+              }));
             }
           }));
           out.show(true);
         } else {
-          for (const f of findings) reportItems.push(toUIItem(f, '', null, f.cwe, f.owasp));
+          for (const f of findings) reportItems.push(toUIItem(f, { explanation_md: '', unified_diff: null, calibrated: null, confidence: null, references: [], tests: [], cwe: f.cwe, owasp: f.owasp }));
         }
 
-        // 5) Abrir reporte visual y guardar últimos resultados (para export)
         if (!token.isCancellationRequested) {
           lastReportItems = reportItems.sort((a, b) =>
             a.relFile.localeCompare(b.relFile) || SEV_RANK[b.severity] - SEV_RANK[a.severity]
           );
-          openSecurityReport(ctx, workspaceRoot, lastReportItems);
-          vscode.window.showInformationMessage(`VulnScan: done (${findings.length} findings >= ${minSeverity}).`);
+          openSecurityReport(ctx, workspaceRoot, lastReportItems, {
+            targetRoot,
+            configs: semgrepConfigs,
+            timestamp: new Date().toISOString()
+          });
+          vscode.window.showInformationMessage(`VulnScan: done (${lastReportItems.length} findings >= ${minSeverity}).`);
         } else {
           vscode.window.showWarningMessage('VulnScan: cancelled.');
         }
@@ -277,19 +280,13 @@ function detectLang(file: string) {
   return 'unknown';
 }
 
-// Recorrido recursivo con excludes, cancelable
 async function enumerateFiles(root: string, excludes: string[], token: vscode.CancellationToken): Promise<string[]> {
   const files: string[] = [];
   const skipWithinRoot = new Set(excludes.map(e => path.resolve(root, e)));
-
   async function walk(dir: string) {
     if (token.isCancellationRequested) return;
     let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
       if (token.isCancellationRequested) return;
       const p = path.join(dir, ent.name);
@@ -301,7 +298,6 @@ async function enumerateFiles(root: string, excludes: string[], token: vscode.Ca
       }
     }
   }
-
   await walk(root);
   return files;
 }
@@ -310,7 +306,6 @@ function defaultExcludes() {
   return ['node_modules', 'vendor', 'tmp', 'log', 'public', 'storage', 'dist', 'build', 'coverage', '.git'];
 }
 
-// Concurrencia limitada estilo p-limit
 async function pLimit<T>(limit: number, tasks: Array<() => Promise<T>>): Promise<void> {
   let i = 0;
   const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
@@ -324,10 +319,16 @@ async function pLimit<T>(limit: number, tasks: Array<() => Promise<T>>): Promise
 
 function toUIItem(
   f: Finding,
-  explanation_md: string,
-  unified_diff: string|null,
-  cwe?: string|null,
-  owasp?: string|null
+  extra: {
+    explanation_md: string;
+    unified_diff: string | null;
+    calibrated: 'none'|'low'|'medium'|'high'|'critical'|null;
+    confidence: number | null;
+    references: string[];
+    tests: string[];
+    cwe?: string|null;
+    owasp?: string|null;
+  }
 ): UIItem {
   return {
     fingerprint: f.fingerprint,
@@ -337,11 +338,15 @@ function toUIItem(
     relFile: vscode.workspace.asRelativePath(f.file),
     range: f.range,
     message: f.message,
-    cwe: cwe ?? null,
-    owasp: owasp ?? null,
+    cwe: extra.cwe ?? null,
+    owasp: extra.owasp ?? null,
     snippet: f.snippet,
-    explanation_md,
-    unified_diff
+    explanation_md: extra.explanation_md,
+    unified_diff: extra.unified_diff,
+    calibrated: extra.calibrated ?? null,
+    confidence: extra.confidence ?? null,
+    references: extra.references,
+    tests: extra.tests
   };
 }
 

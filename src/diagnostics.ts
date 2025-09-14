@@ -26,7 +26,7 @@ export function publishFindings(findings: Finding[]) {
 }
 
 function mapSeverity(s:string) {
-  if (s === 'critical' || s === 'high') return vscode.DiagnosticSeverity.Error;
-  if (s === 'medium') return vscode.DiagnosticSeverity.Warning;
+  if (s === 'critical' || s === 'high') {return vscode.DiagnosticSeverity.Error;}
+  if (s === 'medium') {return vscode.DiagnosticSeverity.Warning;}
   return vscode.DiagnosticSeverity.Information;
 }

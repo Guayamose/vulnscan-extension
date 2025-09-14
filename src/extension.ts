@@ -25,10 +25,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   try {
     const envPath = path.join(ctx.extensionPath, '.env');
-    if (fs.existsSync(envPath)) dotenv.config({ path: envPath });
+    if (fs.existsSync(envPath)) {dotenv.config({ path: envPath });}
   } catch {}
   const secretKey = await ctx.secrets.get(TOKEN_KEY);
-  if (secretKey && !process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = secretKey;
+  if (secretKey && !process.env.OPENAI_API_KEY) {process.env.OPENAI_API_KEY = secretKey;}
 
   statusScan = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusScan.text = '$(shield) Scan';
@@ -61,7 +61,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 async function maybeShowSetup() {
   const hasKey = !!process.env.OPENAI_API_KEY;
-  if (!hasKey) setTimeout(() => vscode.commands.executeCommand('sec.setup'), 500);
+  if (!hasKey) {setTimeout(() => vscode.commands.executeCommand('sec.setup'), 500);}
 }
 
 async function setMinSeverity() {
@@ -71,7 +71,7 @@ async function setMinSeverity() {
     title: 'Minimum severity',
     placeHolder: current
   });
-  if (!pick) return;
+  if (!pick) {return;}
   await cfg.update('minSeverity', pick, vscode.ConfigurationTarget.Workspace);
   updateSevStatus();
 }
@@ -89,7 +89,7 @@ async function exportReport() {
     return vscode.window.showWarningMessage('No hay un reporte reciente para exportar. Ejecuta "Security: Scan Workspace" primero.');
   }
   const uri = await vscode.window.showSaveDialog({ filters: { Markdown: ['md'] }, saveLabel: 'Export' });
-  if (!uri) return;
+  if (!uri) {return;}
   const md = renderMarkdown(lastReportItems);
   await vscode.workspace.fs.writeFile(uri, Buffer.from(md, 'utf8'));
   vscode.window.showInformationMessage(`Reporte exportado a ${uri.fsPath}`);
@@ -125,7 +125,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
   const hasKey = !!process.env.OPENAI_API_KEY;
 
   let analysisLanguage = cfg.get<string>('enrich.language', 'es')!;
-  if (analysisLanguage === 'auto') analysisLanguage = (vscode.env.language || 'en').slice(0, 2);
+  if (analysisLanguage === 'auto') {analysisLanguage = (vscode.env.language || 'en').slice(0, 2);}
 
   const appDir = path.join(workspaceRoot, 'app');
   const out = vscode.window.createOutputChannel('Security');
@@ -161,7 +161,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
 
         const allFiles = await enumerateFiles(targetRoot, defaultExcludes(), token);
         const targetFiles = allFiles.filter(f => allowedExtensions.has(path.extname(f)));
-        if (token.isCancellationRequested) return;
+        if (token.isCancellationRequested) {return;}
 
         out.appendLine(`Enumerated files: ${allFiles.length}`);
         out.appendLine(`Target files (by extension): ${targetFiles.length}`);
@@ -176,7 +176,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
         let done = 0;
 
         for (let i = 0; i < total; i += batchSize) {
-          if (token.isCancellationRequested) break;
+          if (token.isCancellationRequested) {break;}
           const batch = targetFiles.slice(i, i + batchSize);
           const aborter = new AbortController();
           token.onCancellationRequested(() => aborter.abort());
@@ -205,7 +205,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
         const ignored = new Set(ctx.workspaceState.get<string[]>(IGNORED_KEY, []));
         const filteredForDiagnostics = mapped.filter(f => !ignored.has(f.fingerprint));
         const hist: Record<string, number> = {};
-        for (const m of filteredForDiagnostics) hist[m.severity] = (hist[m.severity] || 0) + 1;
+        for (const m of filteredForDiagnostics) {hist[m.severity] = (hist[m.severity] || 0) + 1;}
         out.appendLine(`Severities after map (ignored filtered out): ${Object.entries(hist).map(([k,v]) => `${k}:${v}`).join(', ') || 'none'}`);
 
         const findings = filteredForDiagnostics.filter(f => SEV_RANK[f.severity] >= SEV_RANK[minSeverity]);
@@ -217,7 +217,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
         const reportItems: UIItem[] = [];
         if (hasKey && findings.length > 0 && !token.isCancellationRequested) {
           await pLimit(enrichConcurrency, findings.map((f, idx) => async () => {
-            if (token.isCancellationRequested) return;
+            if (token.isCancellationRequested) {return;}
             const loc = `${f.file}:${f.range.start.line + 1}`;
             out.appendLine(`\n[${idx + 1}/${findings.length}] Enriching ${f.ruleId} @ ${loc} …`);
             try {
@@ -247,7 +247,7 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
           }));
           out.show(true);
         } else {
-          for (const f of findings) reportItems.push(toUIItem(f, { explanation_md: '', unified_diff: null, calibrated: null, confidence: null, references: [], tests: [], cwe: f.cwe, owasp: f.owasp }));
+          for (const f of findings) {reportItems.push(toUIItem(f, { explanation_md: '', unified_diff: null, calibrated: null, confidence: null, references: [], tests: [], cwe: f.cwe, owasp: f.owasp }));}
         }
 
         if (!token.isCancellationRequested) {
@@ -273,10 +273,10 @@ async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRun
 }
 
 function detectLang(file: string) {
-  if (file.endsWith('.rb')) return 'ruby';
-  if (file.endsWith('.py')) return 'python';
-  if (file.endsWith('.ts') || file.endsWith('.tsx')) return 'typescript';
-  if (file.endsWith('.js') || file.endsWith('.jsx')) return 'javascript';
+  if (file.endsWith('.rb')) {return 'ruby';}
+  if (file.endsWith('.py')) {return 'python';}
+  if (file.endsWith('.ts') || file.endsWith('.tsx')) {return 'typescript';}
+  if (file.endsWith('.js') || file.endsWith('.jsx')) {return 'javascript';}
   return 'unknown';
 }
 
@@ -284,14 +284,14 @@ async function enumerateFiles(root: string, excludes: string[], token: vscode.Ca
   const files: string[] = [];
   const skipWithinRoot = new Set(excludes.map(e => path.resolve(root, e)));
   async function walk(dir: string) {
-    if (token.isCancellationRequested) return;
+    if (token.isCancellationRequested) {return;}
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
-      if (token.isCancellationRequested) return;
+      if (token.isCancellationRequested) {return;}
       const p = path.join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (skipWithinRoot.has(p)) continue;
+        if (skipWithinRoot.has(p)) {continue;}
         await walk(p);
       } else {
         files.push(p);

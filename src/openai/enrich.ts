@@ -41,7 +41,7 @@ const SCHEMA_OBJECT = {
 
 /* ------------------------------ Utilidades ------------------------------ */
 function safeJSON(s: unknown) {
-  if (!s || typeof s !== 'string') return null;
+  if (!s || typeof s !== 'string') {return null;}
   try { return JSON.parse(s); } catch { return null; }
 }
 

@@ -72,22 +72,22 @@ export function openSecurityReport(
           const fp: string = msg.fingerprint;
           const arr = ctx.workspaceState.get<string[]>(IGNORED_KEY, []);
           const s = new Set(arr);
-          if (s.has(fp)) s.delete(fp); else s.add(fp);
+          if (s.has(fp)) {s.delete(fp);} else {s.add(fp);}
           await ctx.workspaceState.update(IGNORED_KEY, [...s]);
           panel.webview.postMessage({ type: 'toggleIgnore:result', ok: true, fp, ignored: s.has(fp) });
           break;
         }
         case 'openExternal': {
           const url: string = msg.url;
-          if (url && /^https?:\/\//i.test(url)) vscode.env.openExternal(vscode.Uri.parse(url));
+          if (url && /^https?:\/\//i.test(url)) {vscode.env.openExternal(vscode.Uri.parse(url));}
           break;
         }
         case 'createIssue': {
           const it = items.find(x => x.fingerprint === msg.fingerprint);
-          if (!it) break;
+          if (!it) {break;}
           const url = await buildGitHubIssueURL(workspaceRoot, it);
-          if (url) vscode.env.openExternal(vscode.Uri.parse(url));
-          else vscode.window.showInformationMessage('No se detectó remoto GitHub.');
+          if (url) {vscode.env.openExternal(vscode.Uri.parse(url));}
+          else {vscode.window.showInformationMessage('No se detectó remoto GitHub.');}
           break;
         }
         case 'exportMd': vscode.commands.executeCommand('sec.exportReport'); break;
@@ -306,7 +306,7 @@ function chip(sev: string, n: number) {
 
 function countBySeverity(items: UIItem[]) {
   const map: Record<Sev, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const it of items) map[it.severity] = (map[it.severity] || 0) + 1;
+  for (const it of items) {map[it.severity] = (map[it.severity] || 0) + 1;}
   return map;
 }
 
@@ -335,7 +335,7 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
             const edit = new vscode.WorkspaceEdit();
             const range = new vscode.Range(doc.positionAt(0), doc.positionAt(text.length));
             edit.replace(uri, range, newText);
-            const ok = await vscode.workspace.applyEdit(edit); if (ok) await doc.save(); return ok;
+            const ok = await vscode.workspace.applyEdit(edit); if (ok) {await doc.save();} return ok;
           }
         }
       }
@@ -350,10 +350,10 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
       const after = doc.lineAt(Math.min(doc.lineCount - 1, end - 1)).range.end;
       const oldBlock = doc.getText(new vscode.Range(before, after));
       const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
-      if (!oldBlock.trim()) return false;
+      if (!oldBlock.trim()) {return false;}
       const edit = new vscode.WorkspaceEdit();
       edit.replace(uri, new vscode.Range(before, after), newBlock);
-      const ok = await vscode.workspace.applyEdit(edit); if (!ok) return false;
+      const ok = await vscode.workspace.applyEdit(edit); if (!ok) {return false;}
       offset += (h.newLines - h.oldLines);
     }
     await doc.save();
@@ -377,7 +377,7 @@ function extractHunks(diff: string) {
     i++;
     while (i < lines.length && !lines[i].startsWith('@@')) {
       const ch = lines[i][0]; const txt = lines[i].slice(1);
-      if (ch === '+' || ch === '-' || ch === ' ') h.lines.push({ kind: ch as any, txt });
+      if (ch === '+' || ch === '-' || ch === ' ') {h.lines.push({ kind: ch as any, txt });}
       i++;
     }
     hunks.push(h);
@@ -416,7 +416,7 @@ async function buildGitHubIssueURL(root: string, it: UIItem): Promise<string | n
     const { execSync } = await import('node:child_process');
     const remote = String(execSync('git config --get remote.origin.url', { cwd: root })).trim();
     const m = /github\.com[:/](.+?)(?:\.git)?$/.exec(remote);
-    if (!m) return null;
+    if (!m) {return null;}
     const repo = m[1];
     const title = encodeURIComponent(`[${it.severity.toUpperCase()}] ${it.ruleId} — ${it.relFile}`);
     const body = encodeURIComponent(renderMarkdown([it]));

@@ -51,20 +51,20 @@ export async function openSetupWizard(ctx: vscode.ExtensionContext) {
   }
 
   async function savePrefs(p: any) {
-    if (p.minSeverity) await cfg.update('minSeverity', p.minSeverity, vscode.ConfigurationTarget.Workspace);
-    if (p.targetDirectory) await cfg.update('targetDirectory', p.targetDirectory, vscode.ConfigurationTarget.Workspace);
-    if (p.analysisLang) await cfg.update('enrich.language', p.analysisLang, vscode.ConfigurationTarget.Workspace);
+    if (p.minSeverity) {await cfg.update('minSeverity', p.minSeverity, vscode.ConfigurationTarget.Workspace);}
+    if (p.targetDirectory) {await cfg.update('targetDirectory', p.targetDirectory, vscode.ConfigurationTarget.Workspace);}
+    if (p.analysisLang) {await cfg.update('enrich.language', p.analysisLang, vscode.ConfigurationTarget.Workspace);}
   }
 
   async function testKey(k?: string) {
     const key = k || (await ctx.secrets.get(TOKEN_KEY));
-    if (!key) return { ok: false, err: 'No API key' };
+    if (!key) {return { ok: false, err: 'No API key' };}
     try {
       // Node 18+ trae fetch nativo
       const res = await fetch('https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${key}` }
       });
-      if (res.ok) return { ok: true };
+      if (res.ok) {return { ok: true };}
       const body = await res.text();
       return { ok: false, err: `${res.status} ${res.statusText} ${body.slice(0, 120)}` };
     } catch (e: any) {
@@ -137,7 +137,7 @@ function makeNonce() {
 function runVersion(bin: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(bin, ['--version'], { timeout: 15000 }, (err, stdout, stderr) => {
-      if (err) return reject(err);
+      if (err) {return reject(err);}
       resolve((stdout || stderr || '').trim());
     });
   });
@@ -146,7 +146,7 @@ function runVersion(bin: string): Promise<string> {
 function runCmd(cmd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     exec(cmd, { shell: '/bin/bash' }, (err, stdout, stderr) => {
-      if (err) return reject(stderr || stdout || err);
+      if (err) {return reject(stderr || stdout || err);}
       resolve(stdout || '');
     });
   });

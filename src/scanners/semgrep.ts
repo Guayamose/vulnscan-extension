@@ -49,7 +49,7 @@ export async function runSemgrepOnFiles(
 /* ---------- helpers ---------- */
 
 function toText(x: unknown): string {
-  if (typeof x === 'string') return x;
+  if (typeof x === 'string') {return x;}
   try {
     // Buffer u otros objetos con toString
     return (x as any)?.toString?.('utf8') ?? '';

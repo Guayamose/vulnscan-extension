@@ -1,4 +1,3 @@
-// src/report.ts
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 
@@ -10,7 +9,6 @@ export type UIItem = {
   severity: Sev;
   file: string;
   relFile: string;
-  // ⇩⇩⇩ aquí el tipo corregido (col en vez de character)
   range: { start: { line: number; col: number }, end: { line: number; col: number } };
   message: string;
   cwe?: string|null;
@@ -42,7 +40,6 @@ export function openSecurityReport(
 
   const ignored = new Set(ctx.workspaceState.get<string[]>(IGNORED_KEY, []));
   const visible = items.filter(i => !ignored.has(i.fingerprint));
-
   panel.webview.html = renderHTML(panel.webview, workspaceRoot, visible, meta);
 
   panel.webview.onDidReceiveMessage(async (msg) => {
@@ -52,8 +49,7 @@ export function openSecurityReport(
           const uri = vscode.Uri.file(msg.file as string);
           const doc = await vscode.workspace.openTextDocument(uri);
           const editor = await vscode.window.showTextDocument(doc, { preview: false });
-          const line = Math.max(0, Number(msg.line || 0));
-          const pos = new vscode.Position(line, 0);
+          const pos = new vscode.Position(Math.max(0, Number(msg.line || 0)), 0);
           editor.selection = new vscode.Selection(pos, pos);
           editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
           break;
@@ -66,13 +62,10 @@ export function openSecurityReport(
         case 'applyDiff': {
           const fp: string = msg.fingerprint;
           const it = items.find(x => x.fingerprint === fp);
-          if (!it || !it.unified_diff) {
-            vscode.window.showWarningMessage('No hay diff aplicable.');
-            break;
-          }
+          if (!it || !it.unified_diff) { vscode.window.showWarningMessage('No hay diff aplicable.'); break; }
           const ok = await tryApplyUnifiedDiff(it.file, it.unified_diff, it.snippet);
           panel.webview.postMessage({ type: 'applyDiff:result', ok, fp });
-          vscode.window.showInformationMessage(ok ? 'Parche aplicado.' : 'No se pudo aplicar el parche automáticamente.');
+          vscode.window.showInformationMessage(ok ? 'Parche aplicado.' : 'No se pudo aplicar automáticamente.');
           break;
         }
         case 'toggleIgnore': {
@@ -94,9 +87,12 @@ export function openSecurityReport(
           if (!it) break;
           const url = await buildGitHubIssueURL(workspaceRoot, it);
           if (url) vscode.env.openExternal(vscode.Uri.parse(url));
-          else vscode.window.showInformationMessage('No se detectó remoto GitHub. Diff copiado en portapapeles.');
+          else vscode.window.showInformationMessage('No se detectó remoto GitHub.');
           break;
         }
+        case 'exportMd': vscode.commands.executeCommand('sec.exportReport'); break;
+        case 'exportJson': vscode.commands.executeCommand('sec.exportJSON'); break;
+        case 'rescan': vscode.commands.executeCommand('sec.scan'); break;
       }
     } catch (e: any) {
       vscode.window.showErrorMessage(`Report action failed: ${e?.message || e}`);
@@ -108,17 +104,14 @@ export function openSecurityReport(
 
 function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta?: any) {
   const nonce = Array.from({ length: 16 }, () => Math.random().toString(36)[2]).join('');
-
   const counts = countBySeverity(items);
   const total = items.length;
   const chips = SEV_ORDER.map(s => chip(s, counts[s] || 0)).join('');
-
   const metaLine = [
     meta?.targetRoot ? `target: ${escapeHtml(path.relative(root, meta.targetRoot) || '.')}` : '',
     meta?.configs?.length ? `configs: ${meta.configs.join(', ')}` : '',
     meta?.timestamp ? `date: ${new Date(meta.timestamp).toLocaleString()}` : ''
   ].filter(Boolean).join(' · ');
-
   const cards = items.map(renderCard).join('');
 
   return `<!DOCTYPE html>
@@ -130,58 +123,59 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
            style-src ${webview.cspSource} 'unsafe-inline';
            script-src 'nonce-${nonce}';">
 <style>
-  :root {
-    --bg: #1e1e1e; --card:#232323; --muted:#9aa0a6; --ink:#eaeaea; --border:#333;
-    --crit:#b00020; --high:#d32f2f; --med:#f57c00; --low:#0288d1; --info:#757575; --ok:#80e27e;
-  }
+  :root { --bg:#1e1e1e; --card:#232323; --muted:#9aa0a6; --ink:#eaeaea; --border:#333;
+          --crit:#b00020; --high:#d32f2f; --med:#f57c00; --low:#0288d1; --info:#757575; --ok:#80e27e; }
   body { background:var(--bg); color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; padding:14px; }
-  h1 { margin: 0 0 10px 0; }
-  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { margin:0; }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:space-between; }
+  .chips { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .chip { padding:4px 10px; border-radius:999px; font-weight:600; font-size:12px; cursor:pointer; user-select:none; }
   .chip.total { background:#2f3b2f; }
-  .chip.critical { background:var(--crit); } .chip.high { background:var(--high); }
-  .chip.medium { background:var(--med); } .chip.low { background:var(--low); } .chip.info { background:var(--info); }
+  .chip.critical { background:var(--crit); } .chip.high{background:var(--high);} .chip.medium{background:var(--med);}
+  .chip.low{background:var(--low);} .chip.info{background:var(--info);}
   .muted { color:var(--muted); }
-  .toolbar { display:flex; gap:10px; align-items:center; margin:10px 0 6px 0; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .btn { background:#0e639c; color:#fff; border:none; border-radius:8px; padding:6px 10px; cursor:pointer; }
   input[type="search"], select { background:#121212; color:#eee; border:1px solid #2a2a2a; border-radius:8px; padding:8px; }
-  .grid { display:flex; flex-direction:column; gap:12px; }
+  .grid { display:flex; flex-direction:column; gap:12px; margin-top:12px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
   .header { display:flex; justify-content:space-between; gap:10px; align-items:center; }
   .badge { font-size:12px; font-weight:700; padding:4px 8px; border-radius:6px; }
-  .sev.medium { background:var(--med); } .sev.high { background:var(--high); } .sev.critical { background:var(--crit); }
-  .sev.low { background:var(--low); } .sev.info { background:var(--info); }
+  .sev.medium{background:var(--med);} .sev.high{background:var(--high);} .sev.critical{background:var(--crit);}
+  .sev.low{background:var(--low);} .sev.info{background:var(--info);}
   .ai { background:#394b39; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-  .btn { background:#0e639c; color:#fff; border:none; padding:6px 10px; border-radius:6px; cursor:pointer; }
-  .btn.gray { background:#3a3a3a; }
   .tag { background:#2f2f2f; padding:3px 8px; border-radius:999px; font-size:12px; }
   details { margin-top:8px; }
   pre { background:#111; border:1px solid #2a2a2a; padding:10px; border-radius:8px; overflow:auto; }
-  a.ref { color:#9ecbff; text-decoration: none; cursor:pointer; }
+  a.ref { color:#9ecbff; text-decoration:none; cursor:pointer; }
 </style>
 </head>
 <body>
-  <h1>Security Report</h1>
-
   <div class="top">
-    <div class="chip total">Total: ${total}</div>
-    ${chips}
-    <span class="muted">${escapeHtml(metaLine)}</span>
-  </div>
-
-  <div class="toolbar">
-    <input id="search" type="search" placeholder="Buscar archivo / regla / texto…" />
-    <select id="sort">
-      <option value="sev">Sort: severity</option>
-      <option value="file">Sort: file</option>
-      <option value="rule">Sort: rule</option>
-    </select>
+    <div class="chips">
+      <div class="chip total">Total: ${total}</div>
+      ${chips}
+      <span class="muted">${escapeHtml(metaLine)}</span>
+    </div>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Buscar…" />
+      <select id="sort">
+        <option value="sev">Sort: severity</option>
+        <option value="file">Sort: file</option>
+        <option value="rule">Sort: rule</option>
+      </select>
+      <button id="btnRescan" class="btn">Rescan</button>
+      <button id="btnExportMd" class="btn">Export MD</button>
+      <button id="btnExportJson" class="btn">Export JSON</button>
+    </div>
   </div>
 
   <div id="list" class="grid">${cards}</div>
 
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
+  const $ = (id) => document.getElementById(id);
   const state = { filters: new Set(JSON.parse(localStorage.getItem('vulnscan.filters')||'[]')) };
 
   document.querySelectorAll('.chip[data-sev]').forEach(el => {
@@ -193,35 +187,14 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     });
   });
 
-  document.getElementById('search').addEventListener('input', filter);
-  document.getElementById('sort').addEventListener('change', sort);
+  $('btnRescan').onclick = () => vscode.postMessage({ type: 'rescan' });
+  $('btnExportMd').onclick = () => vscode.postMessage({ type: 'exportMd' });
+  $('btnExportJson').onclick = () => vscode.postMessage({ type: 'exportJson' });
 
-  function sort() {
-    const how = document.getElementById('sort').value;
-    const list = document.getElementById('list');
-    const nodes = [...list.children];
-    nodes.sort((a,b) => {
-      if (how === 'file') return a.dataset.rel.localeCompare(b.dataset.rel);
-      if (how === 'rule') return a.dataset.rule.localeCompare(b.dataset.rule);
-      const ord = ['critical','high','medium','low','info'];
-      return ord.indexOf(a.dataset.sev) - ord.indexOf(b.dataset.sev);
-    });
-    list.replaceChildren(...nodes);
-  }
+  $('search').addEventListener('input', filter);
+  $('sort').addEventListener('change', sort);
 
-  function filter() {
-    const q = (document.getElementById('search').value || '').toLowerCase();
-    const active = state.filters;
-    [...document.querySelectorAll('.card')].forEach(card => {
-      const sev = card.dataset.sev;
-      const hay = !active.size || active.has(sev);
-      const text = (card.innerText || '').toLowerCase();
-      const okQ = !q || text.includes(q);
-      card.style.display = (hay && okQ) ? '' : 'none';
-    });
-  }
-
-  // botones
+  // acciones por card
   document.querySelectorAll('[data-open]').forEach(btn => btn.addEventListener('click', e => {
     const file = e.currentTarget.getAttribute('data-open');
     const line = Number(e.currentTarget.getAttribute('data-line') || '0');
@@ -244,7 +217,6 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     vscode.postMessage({ type: 'createIssue', fingerprint: e.currentTarget.getAttribute('data-issue') });
   }));
 
-  // mensajes de vuelta
   window.addEventListener('message', ev => {
     const m = ev.data;
     if (m.type === 'toggleIgnore:result' && m.ok) {
@@ -252,12 +224,35 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
       if (card) card.remove();
     }
     if (m.type === 'applyDiff:result') {
-      if (m.ok) {
-        const card = document.querySelector('.card[data-fp="'+m.fp+'"]');
-        if (card) card.style.outline = '2px solid #80e27e';
-      }
+      const card = document.querySelector('.card[data-fp="'+m.fp+'"]');
+      if (card) card.style.outline = m.ok ? '2px solid #80e27e' : '2px solid #ef5350';
     }
   });
+
+  function sort() {
+    const how = $('sort').value;
+    const list = $('list');
+    const nodes = [...list.children];
+    nodes.sort((a,b) => {
+      if (how === 'file') return a.dataset.rel.localeCompare(b.dataset.rel);
+      if (how === 'rule') return a.dataset.rule.localeCompare(b.dataset.rule);
+      const ord = ['critical','high','medium','low','info'];
+      return ord.indexOf(a.dataset.sev) - ord.indexOf(b.dataset.sev);
+    });
+    list.replaceChildren(...nodes);
+  }
+
+  function filter() {
+    const q = ($('search').value || '').toLowerCase();
+    const active = state.filters;
+    [...document.querySelectorAll('.card')].forEach(card => {
+      const sev = card.dataset.sev;
+      const hay = !active.size || active.has(sev);
+      const text = (card.innerText || '').toLowerCase();
+      const okQ = !q || text.includes(q);
+      card.style.display = (hay && okQ) ? '' : 'none';
+    });
+  }
 
   filter(); sort();
 </script>
@@ -275,8 +270,7 @@ function renderCard(it: UIItem) {
 
   const expl = it.explanation_md ? `<details open><summary>Explicación</summary><div>${mdToHtml(it.explanation_md)}</div></details>` : '';
   const snip = it.snippet ? `<details><summary>Snippet</summary><pre>${escapeHtml(it.snippet)}</pre></details>` : '';
-  const diff = it.unified_diff ? `<details><summary>Propuesta de fix (diff)</summary><div class="row"><button class="btn" data-copy="${escapeAttr(it.unified_diff)}">Copy diff</button><button class="btn gray" data-apply="${escapeAttr(it.fingerprint)}">Try apply patch</button></div><pre>${escapeHtml(it.unified_diff)}</pre></details>` : '';
-
+  const diff = it.unified_diff ? `<details><summary>Propuesta de fix (diff)</summary><div class="row"><button class="btn" data-copy="${escapeAttr(it.unified_diff)}">Copy diff</button><button class="btn" data-apply="${escapeAttr(it.fingerprint)}">Try patch</button></div><pre>${escapeHtml(it.unified_diff)}</pre></details>` : '';
   const tests = (it.tests || []).length ? `<details><summary>Tests sugeridos</summary><ul>${it.tests.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul></details>` : '';
   const refs = (it.references || []).length ? `<details><summary>Referencias</summary><ul>${it.references.map(r => refItem(r)).join('')}</ul></details>` : '';
 
@@ -290,9 +284,9 @@ function renderCard(it: UIItem) {
       </div>
       <div class="row">
         ${ai}${conf}${cwe}${owasp}
-        <button class="btn" data-open="${escapeAttr(it.file)}" data-line="${it.range.start.line}">Abrir en editor</button>
-        <button class="btn gray" data-ignore="${escapeAttr(it.fingerprint)}">False Positive</button>
-        <button class="btn gray" data-issue="${escapeAttr(it.fingerprint)}">Create Issue</button>
+        <button class="btn" data-open="${escapeAttr(it.file)}" data-line="${it.range.start.line}">Open</button>
+        <button class="btn" data-ignore="${escapeAttr(it.fingerprint)}">False Positive</button>
+        <button class="btn" data-issue="${escapeAttr(it.fingerprint)}">Create Issue</button>
       </div>
     </div>
     <div class="muted" style="margin-top:6px">${escapeHtml(it.message || '')}</div>
@@ -316,34 +310,21 @@ function countBySeverity(items: UIItem[]) {
   return map;
 }
 
-function escapeHtml(s: string) {
-  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]!);
-}
+function escapeHtml(s: string) { return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]!); }
 function escapeAttr(s: string) { return escapeHtml(s).replace(/\n/g,'\\n'); }
+function mdToHtml(md: string) { const fenced = md.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`); return fenced.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g,'<br>')}</p>`).join('\n'); }
+function refItem(r: string) { const url = String(r).trim(); const safe = /^https?:\/\//i.test(url) ? url : ''; const label = safe ? url.replace(/^https?:\/\//,'') : url; return safe ? `<li><a class="ref" data-href="${escapeAttr(safe)}">${escapeHtml(label)}</a></li>` : `<li>${escapeHtml(url)}</li>`; }
 
-function mdToHtml(md: string) {
-  const fenced = md.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`);
-  const lines = fenced.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g,'<br>')}</p>`);
-  return lines.join('\n');
-}
-
-function refItem(r: string) {
-  const url = String(r).trim();
-  const safe = /^https?:\/\//i.test(url) ? url : '';
-  const label = safe ? url.replace(/^https?:\/\//,'') : url;
-  if (!safe) return `<li>${escapeHtml(url)}</li>`;
-  return `<li><a class="ref" data-href="${escapeAttr(safe)}">${escapeHtml(label)}</a></li>`;
-}
-
-/* --------------------------- Apply unified diff --------------------------- */
+/* ---------- very light patch applier (best effort) ---------- */
 async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string): Promise<boolean> {
   try {
     const uri = vscode.Uri.file(file);
     const doc = await vscode.workspace.openTextDocument(uri);
     let text = doc.getText();
 
+    // Fast path: single hunk replace using snippet
     if (snippet && /^---[\s\S]*?\n\+\+\+[\s\S]*?@@/m.test(diff)) {
-      const blocks = extractHunks(diff).map(h => h);
+      const blocks = extractHunks(diff);
       if (blocks.length === 1) {
         const h = blocks[0];
         const original = h.lines.filter(l => l.kind !== '+').map(l => l.txt).join('\n');
@@ -352,11 +333,9 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
           const newText = text.replace(original, added);
           if (newText !== text) {
             const edit = new vscode.WorkspaceEdit();
-            const full = new vscode.Range(doc.positionAt(0), doc.positionAt(text.length));
-            edit.replace(uri, full, newText);
-            const ok = await vscode.workspace.applyEdit(edit);
-            if (ok) await doc.save();
-            return ok;
+            const range = new vscode.Range(doc.positionAt(0), doc.positionAt(text.length));
+            edit.replace(uri, range, newText);
+            const ok = await vscode.workspace.applyEdit(edit); if (ok) await doc.save(); return ok;
           }
         }
       }
@@ -370,26 +349,16 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
       const before = doc.lineAt(Math.max(0, start)).range.start;
       const after = doc.lineAt(Math.min(doc.lineCount - 1, end - 1)).range.end;
       const oldBlock = doc.getText(new vscode.Range(before, after));
-
-      const newBlock = h.lines
-        .filter(l => l.kind !== '-')
-        .map(l => l.txt)
-        .join('\n');
-
+      const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
       if (!oldBlock.trim()) return false;
-
       const edit = new vscode.WorkspaceEdit();
       edit.replace(uri, new vscode.Range(before, after), newBlock);
-      const ok = await vscode.workspace.applyEdit(edit);
-      if (!ok) return false;
-
+      const ok = await vscode.workspace.applyEdit(edit); if (!ok) return false;
       offset += (h.newLines - h.oldLines);
     }
     await doc.save();
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 function extractHunks(diff: string) {
@@ -402,16 +371,12 @@ function extractHunks(diff: string) {
     const m = /^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/.exec(lines[i]);
     if (!m) { i++; continue; }
     let h: H = {
-      oldStart: parseInt(m[1],10),
-      oldLines: parseInt(m[2]||'1',10),
-      newStart: parseInt(m[3],10),
-      newLines: parseInt(m[4]||'1',10),
-      lines: []
+      oldStart: parseInt(m[1],10), oldLines: parseInt(m[2]||'1',10),
+      newStart: parseInt(m[3],10), newLines: parseInt(m[4]||'1',10), lines: []
     };
     i++;
     while (i < lines.length && !lines[i].startsWith('@@')) {
-      const ch = lines[i][0];
-      const txt = lines[i].slice(1);
+      const ch = lines[i][0]; const txt = lines[i].slice(1);
       if (ch === '+' || ch === '-' || ch === ' ') h.lines.push({ kind: ch as any, txt });
       i++;
     }
@@ -420,7 +385,7 @@ function extractHunks(diff: string) {
   return hunks;
 }
 
-/* -------------------------- Exporter (Markdown) -------------------------- */
+/* -------------------------- Export (Markdown) -------------------------- */
 export function renderMarkdown(items: UIItem[]) {
   const rows = items.map(it => {
     const header = `### [${it.severity.toUpperCase()}] ${it.relFile} — ${it.ruleId}`;
@@ -446,7 +411,6 @@ export function renderMarkdown(items: UIItem[]) {
   return head + rows + '\n';
 }
 
-/* ------------------------------- GitHub URL ------------------------------- */
 async function buildGitHubIssueURL(root: string, it: UIItem): Promise<string | null> {
   try {
     const { execSync } = await import('node:child_process');
@@ -457,7 +421,5 @@ async function buildGitHubIssueURL(root: string, it: UIItem): Promise<string | n
     const title = encodeURIComponent(`[${it.severity.toUpperCase()}] ${it.ruleId} — ${it.relFile}`);
     const body = encodeURIComponent(renderMarkdown([it]));
     return `https://github.com/${repo}/issues/new?title=${title}&body=${body}`;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }

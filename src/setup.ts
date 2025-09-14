@@ -1,228 +1,286 @@
-// src/setup.ts
 import * as vscode from 'vscode';
-import { execFile } from 'node:child_process';
-import * as os from 'node:os';
+import { exec, execFile } from 'node:child_process';
 import * as path from 'node:path';
 
 const TOKEN_KEY = 'vulnscan/apiKey';
-
-function detectSemgrep(): Promise<{ ok: boolean; version?: string; note?: string }> {
-  const candidates = [
-    'semgrep',
-    path.join(os.homedir(), '.local', 'bin', 'semgrep'),
-    path.join(os.homedir(), '.local', 'share', 'pipx', 'venvs', 'semgrep', 'bin', 'semgrep')
-  ];
-  return new Promise((resolve) => {
-    let idx = 0;
-    const tryNext = () => {
-      if (idx >= candidates.length) return resolve({ ok: false, note: 'No encontrado en PATH ni rutas comunes.' });
-      const bin = candidates[idx++];
-      execFile(bin, ['--version'], { timeout: 5000 }, (err, stdout) => {
-        if (!err && stdout) return resolve({ ok: true, version: stdout.trim() });
-        tryNext();
-      });
-    };
-    tryNext();
-  });
-}
 
 export async function openSetupWizard(ctx: vscode.ExtensionContext) {
   const panel = vscode.window.createWebviewPanel(
     'vulnscanSetup',
     'VulnScan — Setup Wizard',
-    vscode.ViewColumn.Active,
+    vscode.ViewColumn.One,
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
   const cfg = vscode.workspace.getConfiguration('vulnscan');
-  const currentMin = cfg.get<string>('minSeverity', 'low')!;
-  const currentTarget = cfg.get<string>('targetDirectory', 'auto')!;
-  const currentLang = cfg.get<string>('enrich.language', 'es')!;
+  const minSeverity = cfg.get<'info'|'low'|'medium'|'high'|'critical'>('minSeverity', 'low');
+  const targetDirectory = cfg.get<'auto'|'root'|'app'>('targetDirectory', 'auto');
+  const analysisLang = cfg.get<string>('enrich.language', 'es');
 
-  panel.webview.html = html(panel.webview, currentMin, currentTarget, currentLang);
+  const nonce = makeNonce();
+  panel.webview.html = getHtml(nonce, {
+    apiKey: (await ctx.secrets.get(TOKEN_KEY)) ? '***' : '',
+    minSeverity, targetDirectory, analysisLang
+  });
 
-  panel.webview.onDidReceiveMessage(async (msg) => {
-    switch (msg.type) {
-      case 'checkSemgrep': {
-        const res = await detectSemgrep();
-        panel.webview.postMessage({ type: 'checkSemgrep:result', ...res });
+  // ——— helpers ———
+  const post = (msg: any) => panel.webview.postMessage(msg);
+
+  async function checkSemgrep(): Promise<{ ok: boolean; version?: string; err?: string }> {
+    try {
+      const version = await runVersion('semgrep');
+      return { ok: true, version };
+    } catch (e: any) {
+      try {
+        // prueba ruta típica pipx
+        const v2 = await runCmd('~/.local/bin/semgrep --version');
+        return { ok: true, version: v2.trim() };
+      } catch (err: any) {
+        return { ok: false, err: String(err?.message || err) };
+      }
+    }
+  }
+
+  async function installSemgrep(): Promise<{ ok: boolean; out?: string; err?: string }> {
+    try {
+      const result = await runCmd('pipx install semgrep -q');
+      return { ok: true, out: result };
+    } catch (e: any) {
+      return { ok: false, err: String(e?.message || e) };
+    }
+  }
+
+  async function savePrefs(p: any) {
+    if (p.minSeverity) await cfg.update('minSeverity', p.minSeverity, vscode.ConfigurationTarget.Workspace);
+    if (p.targetDirectory) await cfg.update('targetDirectory', p.targetDirectory, vscode.ConfigurationTarget.Workspace);
+    if (p.analysisLang) await cfg.update('enrich.language', p.analysisLang, vscode.ConfigurationTarget.Workspace);
+  }
+
+  async function testKey(k?: string) {
+    const key = k || (await ctx.secrets.get(TOKEN_KEY));
+    if (!key) return { ok: false, err: 'No API key' };
+    try {
+      // Node 18+ trae fetch nativo
+      const res = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${key}` }
+      });
+      if (res.ok) return { ok: true };
+      const body = await res.text();
+      return { ok: false, err: `${res.status} ${res.statusText} ${body.slice(0, 120)}` };
+    } catch (e: any) {
+      return { ok: false, err: String(e?.message || e) };
+    }
+  }
+
+  // ——— mensajes desde WebView ———
+  panel.webview.onDidReceiveMessage(async (m) => {
+    switch (m.type) {
+      case 'recheck': {
+        post({ type: 'semgrep:status', state: 'checking' });
+        const res = await checkSemgrep();
+        post({ type: 'semgrep:status', state: res.ok ? 'ok' : 'missing', version: res.version, err: res.err });
         break;
       }
-      case 'installSemgrep': {
-        const term = vscode.window.createTerminal({ name: 'Install Semgrep' });
-        term.show();
-        term.sendText('pipx install semgrep');
-        vscode.window.showInformationMessage('Abierto terminal para instalar Semgrep con pipx. Cuando termine, pulsa "Recheck".');
+      case 'install': {
+        post({ type: 'semgrep:install', state: 'running' });
+        const res = await installSemgrep();
+        const stat = await checkSemgrep();
+        post({ type: 'semgrep:install', state: res.ok ? 'done' : 'error', out: res.out, err: res.err, version: stat.version });
         break;
       }
-      case 'saveApiKey': {
-        const key = String(msg.key || '').trim();
-        if (!key) { vscode.window.showWarningMessage('Introduce una API key válida.'); break; }
+      case 'saveKey': {
+        const key = String(m.key || '').trim();
+        if (!key) { vscode.window.showWarningMessage('Introduce una API key'); break; }
         await ctx.secrets.store(TOKEN_KEY, key);
-        if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
-        vscode.window.showInformationMessage('OPENAI_API_KEY guardada en VS Code Secrets.');
+        process.env.OPENAI_API_KEY = key;
+        vscode.window.showInformationMessage('OpenAI API key guardada.');
+        post({ type: 'key:saved' });
         break;
       }
-      case 'testAi': {
-        try {
-          // Sin dependencias: basta con comprobar que hay API key
-          const ok = !!process.env.OPENAI_API_KEY;
-          panel.webview.postMessage({ type: 'testAi:result', ok, err: ok ? '' : 'API key no configurada' });
-        } catch (e: any) {
-          panel.webview.postMessage({ type: 'testAi:result', ok: false, err: e?.message || String(e) });
-        }
+      case 'testKey': {
+        const key = String(m.key || '').trim() || (await ctx.secrets.get(TOKEN_KEY)) || '';
+        const res = await testKey(key);
+        post({ type: 'key:test', ok: res.ok, err: res.err });
         break;
       }
-      case 'setConfig': {
-        const { key, value } = msg;
-        await vscode.workspace.getConfiguration('vulnscan').update(key, value, vscode.ConfigurationTarget.Workspace);
-        vscode.window.showInformationMessage(`VulnScan: ${key} = ${value}`);
+      case 'savePrefs': {
+        await savePrefs(m.prefs || {});
+        vscode.window.showInformationMessage('Preferencias guardadas.');
         break;
       }
-      case 'scanNow': {
+      case 'run': {
+        await savePrefs(m.prefs || {});
         vscode.commands.executeCommand('sec.scan');
+        break;
+      }
+      case 'exportMd': {
+        vscode.commands.executeCommand('sec.exportReport');
+        break;
+      }
+      case 'exportJson': {
+        vscode.commands.executeCommand('sec.exportJSON');
         break;
       }
     }
   });
+
+  // auto-chequeo al abrir
+  setTimeout(() => post({ type: 'semgrep:auto' }), 300);
 }
 
-function nonce() { return Array.from({ length: 32 }, () => Math.random().toString(36)[2]).join(''); }
+/* ----------------------------- utils ----------------------------- */
 
-function html(webview: vscode.Webview, minSev: string, targetDir: string, analysisLang: string) {
-  const n = nonce();
+function makeNonce() {
+  return Array.from({ length: 16 }, () => Math.random().toString(36)[2]).join('');
+}
+
+function runVersion(bin: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(bin, ['--version'], { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err) return reject(err);
+      resolve((stdout || stderr || '').trim());
+    });
+  });
+}
+
+function runCmd(cmd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { shell: '/bin/bash' }, (err, stdout, stderr) => {
+      if (err) return reject(stderr || stdout || err);
+      resolve(stdout || '');
+    });
+  });
+}
+
+/* ----------------------------- HTML ----------------------------- */
+
+function getHtml(nonce: string, init: {
+  apiKey: string; minSeverity: string; targetDirectory: string; analysisLang: string;
+}) {
   return `<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8" />
+<meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
-  content="default-src 'none'; img-src ${webview.cspSource} https:;
-           style-src ${webview.cspSource} 'unsafe-inline';
-           script-src 'nonce-${n}';">
+  content="default-src 'none'; img-src https:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
-  body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; color: #eaeaea; background: #1e1e1e; margin: 0; padding: 16px; }
-  h1 { margin: 0 0 12px 0; font-size: 18px; }
-  .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
-  .card { background: #232323; border: 1px solid #333; border-radius: 10px; padding: 14px; }
-  .row { display:flex; gap:8px; align-items:center; margin: 8px 0; }
-  .btn { background: #0e639c; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
-  .btn.secondary { background: #3a3a3a; }
-  input[type="password"], select { background:#111; color:#eee; border:1px solid #2a2a2a; border-radius:6px; padding:8px; width:100%; }
-  .footer { margin-top:16px; display:flex; gap:10px; }
+  :root { --bg:#1e1e1e; --card:#232323; --ink:#eaeaea; --muted:#9aa0a6; --ok:#80e27e; --bad:#ef5350; --btn:#0e639c; }
+  html,body { background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; }
+  .wrap { padding: 16px; max-width: 980px; }
+  h1 { margin: 0 0 16px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid #333; border-radius:12px; padding:14px; }
+  .title { font-weight:700; margin-bottom:6px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .btn { background:var(--btn); color:#fff; border:none; border-radius:8px; padding:8px 10px; cursor:pointer; }
+  .muted { color:var(--muted); font-size:12px; }
+  input, select { width:100%; background:#121212; color:#eee; border:1px solid #2a2a2a; border-radius:8px; padding:8px; }
+  .ok { color: var(--ok); font-weight:600; }
+  .bad { color: var(--bad); font-weight:600; }
+  .actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
 </style>
 </head>
 <body>
+<div class="wrap">
   <h1>VulnScan — Setup Wizard</h1>
+
   <div class="grid">
     <div class="card">
-      <h3>1) Semgrep</h3>
-      <div id="semgrepStatus" class="row">Estado: <span id="sgLabel">Checking…</span></div>
-      <div class="row">
-        <button class="btn" onclick="recheck()">Recheck</button>
-        <button class="btn secondary" onclick="install()">Install via pipx</button>
+      <div class="title">1) Semgrep</div>
+      <div class="row"><div id="sgStatus" class="muted">Estado: <span>checking…</span></div></div>
+      <div class="actions">
+        <button id="btnRecheck" class="btn">Recheck</button>
+        <button id="btnInstall" class="btn">Instalar via pipx</button>
       </div>
     </div>
 
     <div class="card">
-      <h3>2) OpenAI API Key</h3>
-      <div class="row"><input id="apiKey" type="password" placeholder="sk-..." /></div>
-      <div class="row">
-        <button class="btn" onclick="saveKey()">Save</button>
-        <button class="btn secondary" onclick="testAi()">Test</button>
-        <span id="aiRes"></span>
+      <div class="title">2) OpenAI API Key</div>
+      <input id="key" type="password" placeholder="sk-..." value="${init.apiKey ? '' : ''}" />
+      <div class="actions">
+        <button id="btnSaveKey" class="btn">Save</button>
+        <button id="btnTestKey" class="btn">Test</button>
+      </div>
+      <div id="keyStatus" class="muted"></div>
+    </div>
+
+    <div class="card">
+      <div class="title">3) Preferencias rápidas</div>
+      <label class="muted">Minimum severity</label>
+      <select id="minSeverity">
+        ${['info','low','medium','high','critical'].map(s => `<option value="${s}" ${s===init.minSeverity?'selected':''}>${s}</option>`).join('')}
+      </select>
+      <label class="muted" style="margin-top:8px; display:block">Target directory</label>
+      <select id="targetDirectory">
+        ${['auto','root','app'].map(s => `<option value="${s}" ${s===init.targetDirectory?'selected':''}>${s}</option>`).join('')}
+      </select>
+      <label class="muted" style="margin-top:8px; display:block">Analysis language</label>
+      <select id="analysisLang">
+        ${['auto','en','es','fr','de','pt','it'].map(s => `<option value="${s}" ${s===init.analysisLang?'selected':''}>${s}</option>`).join('')}
+      </select>
+      <div class="actions">
+        <button id="btnSavePrefs" class="btn">Guardar preferencias</button>
       </div>
     </div>
 
     <div class="card">
-      <h3>3) Preferencias rápidas</h3>
-      <div class="row">
-        <label style="min-width:160px">Minimum severity</label>
-        <select id="minSev">
-          <option value="info">info</option>
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high</option>
-          <option value="critical">critical</option>
-        </select>
+      <div class="title">4) ¡Listo!</div>
+      <p class="muted">Pulsa para ejecutar tu primer escaneo del workspace.</p>
+      <div class="actions">
+        <button id="btnRun" class="btn">Run first scan</button>
+        <button id="btnExportMd" class="btn">Export MD</button>
+        <button id="btnExportJson" class="btn">Export JSON</button>
       </div>
-      <div class="row">
-        <label style="min-width:160px">Target directory</label>
-        <select id="targetDir">
-          <option value="auto">auto</option>
-          <option value="app">app</option>
-          <option value="root">root</option>
-        </select>
-      </div>
-      <div class="row">
-        <label style="min-width:160px">Language of analysis</label>
-        <select id="analysisLang">
-          <option value="auto">auto</option>
-          <option value="es">es</option>
-          <option value="en">en</option>
-          <option value="fr">fr</option>
-          <option value="de">de</option>
-          <option value="it">it</option>
-          <option value="pt">pt</option>
-          <option value="ja">ja</option>
-          <option value="ko">ko</option>
-          <option value="zh">zh</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>4) ¡Listo!</h3>
-      <p>Pulsa para ejecutar tu primer escaneo del workspace.</p>
-      <button class="btn" onclick="scanNow()">Run first scan</button>
     </div>
   </div>
 
-  <div class="footer">
-    <small>También puedes abrir este asistente desde la paleta: “VulnScan: Setup Wizard”.</small>
-  </div>
+  <p class="muted" style="margin-top:12px">También puedes abrir este asistente desde la paleta: “VulnScan: Setup Wizard”.</p>
+</div>
 
-<script nonce="${n}">
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
 
-  function recheck() {
-    document.getElementById('sgLabel').textContent = 'Checking…';
-    vscode.postMessage({ type: 'checkSemgrep' });
+  const $ = (id) => document.getElementById(id);
+
+  function prefs() {
+    return {
+      minSeverity: $('minSeverity').value,
+      targetDirectory: $('targetDirectory').value,
+      analysisLang: $('analysisLang').value
+    };
   }
-  function install() { vscode.postMessage({ type: 'installSemgrep' }); }
-  function saveKey() {
-    const key = document.getElementById('apiKey').value;
-    vscode.postMessage({ type: 'saveApiKey', key });
-  }
-  function testAi() {
-    document.getElementById('aiRes').textContent = 'Testing…';
-    vscode.postMessage({ type: 'testAi' });
-  }
-  function scanNow() { vscode.postMessage({ type: 'scanNow' }); }
-  function setConfig(key, value) { vscode.postMessage({ type: 'setConfig', key, value }); }
 
-  // init values
-  document.getElementById('minSev').value = "${minSev}";
-  document.getElementById('targetDir').value = "${targetDir}";
-  document.getElementById('analysisLang').value = "${analysisLang}";
+  $('btnRecheck').onclick = () => vscode.postMessage({ type: 'recheck' });
+  $('btnInstall').onclick = () => vscode.postMessage({ type: 'install' });
+  $('btnSaveKey').onclick = () => vscode.postMessage({ type: 'saveKey', key: $('key').value.trim() });
+  $('btnTestKey').onclick = () => vscode.postMessage({ type: 'testKey', key: $('key').value.trim() });
+  $('btnSavePrefs').onclick = () => vscode.postMessage({ type: 'savePrefs', prefs: prefs() });
+  $('btnRun').onclick = () => vscode.postMessage({ type: 'run', prefs: prefs() });
+  $('btnExportMd').onclick = () => vscode.postMessage({ type: 'exportMd' });
+  $('btnExportJson').onclick = () => vscode.postMessage({ type: 'exportJson' });
 
-  document.getElementById('minSev').addEventListener('change', e => setConfig('vulnscan.minSeverity', e.target.value));
-  document.getElementById('targetDir').addEventListener('change', e => setConfig('vulnscan.targetDirectory', e.target.value));
-  document.getElementById('analysisLang').addEventListener('change', e => setConfig('vulnscan.enrich.language', e.target.value));
+  window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (m.type === 'semgrep:auto') vscode.postMessage({ type: 'recheck' });
 
-  // first checks
-  recheck();
-
-  window.addEventListener('message', (ev) => {
-    const msg = ev.data;
-    if (msg.type === 'checkSemgrep:result') {
-      const el = document.getElementById('sgLabel');
-      if (msg.ok) el.innerHTML = '<span style="color:#80e27e;font-weight:600">Found</span> — ' + (msg.version || '');
-      else el.innerHTML = '<span style="color:#ff6659;font-weight:600">Not found</span> — ' + (msg.note || '');
+    if (m.type === 'semgrep:status') {
+      const el = $('sgStatus');
+      if (m.state === 'checking') el.innerHTML = 'Estado: <span>checking…</span>';
+      else if (m.state === 'ok') el.innerHTML = 'Estado: <span class="ok">Found</span> — <span>' + (m.version || '') + '</span>';
+      else el.innerHTML = 'Estado: <span class="bad">Not found</span>';
     }
-    if (msg.type === 'testAi:result') {
-      const el = document.getElementById('aiRes');
-      if (msg.ok) el.innerHTML = '<span style="color:#80e27e;font-weight:600">OK</span>';
-      else el.innerHTML = '<span style="color:#ff6659;font-weight:600">Fail</span> — ' + (msg.err || '');
+    if (m.type === 'semgrep:install') {
+      const el = $('sgStatus');
+      if (m.state === 'running') el.innerHTML = 'Estado: <span>installing…</span>';
+      else if (m.state === 'done') el.innerHTML = 'Estado: <span class="ok">Installed</span> — <span>' + (m.version || '') + '</span>';
+      else if (m.state === 'error') el.innerHTML = 'Estado: <span class="bad">Install failed</span>';
+    }
+    if (m.type === 'key:test') {
+      $('keyStatus').innerText = m.ok ? 'OK' : ('Error: ' + (m.err||''));
+      $('keyStatus').className = m.ok ? 'ok' : 'bad';
+    }
+    if (m.type === 'key:saved') {
+      $('key').value = '';
     }
   });
 </script>

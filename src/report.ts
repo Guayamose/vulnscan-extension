@@ -49,7 +49,8 @@ export function openSecurityReport(
           const uri = vscode.Uri.file(msg.file as string);
           const doc = await vscode.workspace.openTextDocument(uri);
           const editor = await vscode.window.showTextDocument(doc, { preview: false });
-          const pos = new vscode.Position(Math.max(0, Number(msg.line || 0)), 0);
+          const line = Math.max(0, Number(msg.line || 0));
+          const pos = new vscode.Position(line, 0);
           editor.selection = new vscode.Selection(pos, pos);
           editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
           break;
@@ -72,22 +73,22 @@ export function openSecurityReport(
           const fp: string = msg.fingerprint;
           const arr = ctx.workspaceState.get<string[]>(IGNORED_KEY, []);
           const s = new Set(arr);
-          if (s.has(fp)) {s.delete(fp);} else {s.add(fp);}
+          if (s.has(fp)) s.delete(fp); else s.add(fp);
           await ctx.workspaceState.update(IGNORED_KEY, [...s]);
           panel.webview.postMessage({ type: 'toggleIgnore:result', ok: true, fp, ignored: s.has(fp) });
           break;
         }
         case 'openExternal': {
           const url: string = msg.url;
-          if (url && /^https?:\/\//i.test(url)) {vscode.env.openExternal(vscode.Uri.parse(url));}
+          if (url && /^https?:\/\//i.test(url)) vscode.env.openExternal(vscode.Uri.parse(url));
           break;
         }
         case 'createIssue': {
           const it = items.find(x => x.fingerprint === msg.fingerprint);
-          if (!it) {break;}
+          if (!it) break;
           const url = await buildGitHubIssueURL(workspaceRoot, it);
-          if (url) {vscode.env.openExternal(vscode.Uri.parse(url));}
-          else {vscode.window.showInformationMessage('No se detectó remoto GitHub.');}
+          if (url) vscode.env.openExternal(vscode.Uri.parse(url));
+          else vscode.window.showInformationMessage('No se detectó remoto GitHub.');
           break;
         }
         case 'exportMd': vscode.commands.executeCommand('sec.exportReport'); break;
@@ -100,7 +101,7 @@ export function openSecurityReport(
   });
 }
 
-/* ------------------------------ HTML/UI ------------------------------ */
+/*  HTML/UI  */
 
 function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta?: any) {
   const nonce = Array.from({ length: 16 }, () => Math.random().toString(36)[2]).join('');
@@ -123,138 +124,388 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
            style-src ${webview.cspSource} 'unsafe-inline';
            script-src 'nonce-${nonce}';">
 <style>
-  :root { --bg:#1e1e1e; --card:#232323; --muted:#9aa0a6; --ink:#eaeaea; --border:#333;
-          --crit:#b00020; --high:#d32f2f; --med:#f57c00; --low:#0288d1; --info:#757575; --ok:#80e27e; }
-  body { background:var(--bg); color:var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial; padding:14px; }
-  h1 { margin:0; }
-  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:space-between; }
-  .chips { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .chip { padding:4px 10px; border-radius:999px; font-weight:600; font-size:12px; cursor:pointer; user-select:none; }
-  .chip.total { background:#2f3b2f; }
-  .chip.critical { background:var(--crit); } .chip.high{background:var(--high);} .chip.medium{background:var(--med);}
-  .chip.low{background:var(--low);} .chip.info{background:var(--info);}
-  .muted { color:var(--muted); }
-  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .btn { background:#0e639c; color:#fff; border:none; border-radius:8px; padding:6px 10px; cursor:pointer; }
-  input[type="search"], select { background:#121212; color:#eee; border:1px solid #2a2a2a; border-radius:8px; padding:8px; }
-  .grid { display:flex; flex-direction:column; gap:12px; margin-top:12px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
-  .header { display:flex; justify-content:space-between; gap:10px; align-items:center; }
-  .badge { font-size:12px; font-weight:700; padding:4px 8px; border-radius:6px; }
-  .sev.medium{background:var(--med);} .sev.high{background:var(--high);} .sev.critical{background:var(--crit);}
-  .sev.low{background:var(--low);} .sev.info{background:var(--info);}
-  .ai { background:#394b39; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
-  .tag { background:#2f2f2f; padding:3px 8px; border-radius:999px; font-size:12px; }
-  details { margin-top:8px; }
-  pre { background:#111; border:1px solid #2a2a2a; padding:10px; border-radius:8px; overflow:auto; }
-  a.ref { color:#9ecbff; text-decoration:none; cursor:pointer; }
+  :root{
+    --bg:#0f1115; --panel:#12151c; --card:#151a22; --ink:#e8eaed; --muted:#9aa0a6; --border:#212735;
+    --ring:#5b9dff;
+    --crit:#ff3b5b; --high:#ff6a3d; --med:#ffbf38; --low:#3aa3ff; --info:#7f8ea3; --ok:#60d394;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; padding:0;
+    background:
+      radial-gradient(80rem 40rem at 10% -10%, rgba(61,126,255,.06), transparent 60%),
+      radial-gradient(60rem 30rem at 90% -20%, rgba(255,123,61,.05), transparent 60%),
+      var(--bg);
+    color:var(--ink); font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial;
+  }
+
+  .topbar{
+    position:sticky; top:0; z-index:5;
+    backdrop-filter:saturate(140%) blur(6px);
+    background: linear-gradient(180deg, rgba(18,21,28,.85), rgba(18,21,28,.65));
+    border-bottom:1px solid var(--border);
+  }
+  .wrap{max-width:1200px; margin:0 auto; padding:12px 16px;}
+  .top{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+
+  .chips{ display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
+    border-radius:999px; font-weight:700; font-size:12px; cursor:pointer; user-select:none;
+    border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.04);
+    transition:transform .12s ease, background-color .15s ease, border-color .15s ease;
+  }
+  .chip[data-active="true"]{ outline:2px solid rgba(255,255,255,.15) }
+  .chip:hover{ transform:translateY(-1px) }
+  .chip.critical{ background: color-mix(in oklab, var(--crit) 20%, transparent); border-color: color-mix(in oklab, var(--crit) 35%, transparent) }
+  .chip.high{ background: color-mix(in oklab, var(--high) 20%, transparent); border-color: color-mix(in oklab, var(--high) 35%, transparent) }
+  .chip.medium{ background: color-mix(in oklab, var(--med) 20%, transparent); border-color: color-mix(in oklab, var(--med) 35%, transparent) }
+  .chip.low{ background: color-mix(in oklab, var(--low) 20%, transparent); border-color: color-mix(in oklab, var(--low) 35%, transparent) }
+  .chip.info{ background: color-mix(in oklab, var(--info) 20%, transparent); border-color: color-mix(in oklab, var(--info) 35%, transparent) }
+  .chip .dot{width:8px; height:8px; border-radius:999px; display:inline-block}
+  .chip.critical .dot{background:var(--crit)} .chip.high .dot{background:var(--high)}
+  .chip.medium .dot{background:var(--med)} .chip.low .dot{background:var(--low)} .chip.info .dot{background:var(--info)}
+
+  .toolbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .muted{ color:var(--muted) }
+
+  .btn{
+    display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:10px;
+    border:1px solid var(--border); background:linear-gradient(180deg, #1a1f29, #161b24);
+    color:#e6eefc; cursor:pointer; transition:transform .12s ease, box-shadow .2s ease, border-color .15s ease;
+    user-select:none;
+  }
+  .btn:hover{ transform:translateY(-1px) }
+  .btn:focus-visible{ outline:2px solid var(--ring); outline-offset:2px }
+  .btn.ghost{ background:transparent }
+
+  input[type="search"], select{
+    background:#0f1320; color:#e8eefc; border:1px solid var(--border); border-radius:10px; padding:8px 10px;
+  }
+  input[type="search"]::placeholder{color:#78839b}
+
+  .list{ max-width:1200px; margin:12px auto; padding:0 16px; display:flex; flex-direction:column; gap:10px; }
+
+  /* ---- Card (details) ---- */
+  details.card{
+    border:1px solid var(--border); border-radius:14px; background:linear-gradient(180deg, #121823, #0f1420);
+    overflow:hidden; transition:border-color .2s ease, background .25s ease;
+  }
+  details.card[open]{ background:linear-gradient(180deg, #151b27, #101626) }
+  details.card:focus-within{ outline:2px solid var(--ring); outline-offset:2px }
+
+  .card-summary{
+    list-style:none; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:12px 14px; cursor:pointer;
+  }
+  .card-summary::-webkit-details-marker{ display:none }
+  .head-left{ display:flex; align-items:center; gap:10px; min-width:0 }
+  .file{ font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rule{ color:var(--muted) }
+
+  .sev{ font-size:11px; font-weight:800; padding:4px 8px; border-radius:8px; text-transform:uppercase; letter-spacing:.02em }
+  .sev.critical{ background:var(--crit) } .sev.high{ background:var(--high) } .sev.medium{ background:var(--med) }
+  .sev.low{ background:var(--low) } .sev.info{ background:var(--info) }
+
+  .head-actions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  .tag{ background:#1b2230; border:1px solid #24314a; padding:3px 8px; border-radius:999px; font-size:12px; color:#c8d4ea }
+
+  .chev{ width:12px; height:12px; transform:rotate(-90deg); transition:transform .2s ease; opacity:.85 }
+  details[open] .chev{ transform:rotate(0) }
+
+  /* smooth content open/close */
+  .card-content{
+    overflow:hidden; height:0; transition:height .22s ease;
+  }
+  details[open] .card-content{ height:auto }
+  .card-inner{ padding:10px 14px 14px 14px; display:grid; gap:10px }
+
+  .msg{ color:#cfe0ff; opacity:.9 }
+
+  details.block{ margin-top:4px; border:1px solid #24314a; border-radius:10px; overflow:hidden }
+  details.block summary{ padding:8px 10px; cursor:pointer; background:#131a28; color:#d2dcf4; list-style:none }
+  details.block summary::-webkit-details-marker{ display:none }
+  details.block[open]{ background:#0f1522 }
+  pre{
+    background:#0b101a; border-top:1px solid #1a2438; margin:0; padding:10px; border-radius:0 0 10px 10px; overflow:auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size:12px;
+  }
+  ul.refs{ margin:8px 0 0 18px; padding:0 }
+  a.ref{ color:#9ecbff; text-decoration:none }
+  a.ref:focus-visible{ outline:2px solid var(--ring); outline-offset:2px }
+
+  /* visual feedback */
+  .flash-ok{ box-shadow: 0 0 0 2px var(--ok) inset }
+  .flash-bad{ box-shadow: 0 0 0 2px #ef5350 inset }
+
+  /* footer note row inside summary */
+  .meta{ display:flex; align-items:center; gap:8px; color:#91a1bf; flex-wrap:wrap }
+
+  /* helper */
+  .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0 }
 </style>
 </head>
 <body>
-  <div class="top">
-    <div class="chips">
-      <div class="chip total">Total: ${total}</div>
-      ${chips}
-      <span class="muted">${escapeHtml(metaLine)}</span>
-    </div>
-    <div class="toolbar">
-      <input id="search" type="search" placeholder="Buscar…" />
-      <select id="sort">
-        <option value="sev">Sort: severity</option>
-        <option value="file">Sort: file</option>
-        <option value="rule">Sort: rule</option>
-      </select>
-      <button id="btnRescan" class="btn">Rescan</button>
-      <button id="btnExportMd" class="btn">Export MD</button>
-      <button id="btnExportJson" class="btn">Export JSON</button>
+  <div class="topbar">
+    <div class="wrap">
+      <div class="top" role="region" aria-label="Security Report toolbar">
+        <div class="chips" id="chips">
+          <div class="chip" id="chip-total" data-sev="total" title="Total">
+            <span class="dot" style="background:#9fb2d2"></span><strong>Total</strong><span id="count-total">${total}</span>
+          </div>
+          ${chips}
+          <span class="muted" id="meta">${escapeHtml(metaLine)}</span>
+        </div>
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Buscar…" aria-label="Buscar" />
+          <select id="sort" aria-label="Ordenar">
+            <option value="sev">Ordenar: severidad</option>
+            <option value="file">Ordenar: archivo</option>
+            <option value="rule">Ordenar: regla</option>
+          </select>
+          <button id="btnExpand" class="btn" title="Expandir todo (E)">Expand all</button>
+          <button id="btnCollapse" class="btn ghost" title="Contraer todo (C)">Collapse all</button>
+          <button id="btnClear" class="btn ghost" title="Limpiar filtros (L)">Limpiar filtros</button>
+          <button id="btnRescan" class="btn">Rescan</button>
+          <button id="btnExportMd" class="btn">Export MD</button>
+          <button id="btnExportJson" class="btn">Export JSON</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div id="list" class="grid">${cards}</div>
+  <div id="list" class="list" role="list">${cards}</div>
 
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
-  const $ = (id) => document.getElementById(id);
-  const state = { filters: new Set(JSON.parse(localStorage.getItem('vulnscan.filters')||'[]')) };
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const LS = {
+    filters: 'vulnscan.filters',
+    sort: 'vulnscan.sort',
+    open: 'vulnscan.open', // array de fingerprints abiertas
+  };
 
-  document.querySelectorAll('.chip[data-sev]').forEach(el => {
-    el.addEventListener('click', () => {
-      const sev = el.getAttribute('data-sev');
-      if (state.filters.has(sev)) state.filters.delete(sev); else state.filters.add(sev);
-      localStorage.setItem('vulnscan.filters', JSON.stringify([...state.filters]));
-      filter();
+  const state = {
+    filters: new Set(JSON.parse(localStorage.getItem(LS.filters)||'[]')),
+    open: new Set(JSON.parse(localStorage.getItem(LS.open)||'[]')),
+    sort: localStorage.getItem(LS.sort) || 'sev',
+  };
+
+  // chips interactivas
+  $$('#chips .chip').forEach(ch => {
+    const sev = ch.dataset.sev;
+    if (sev && sev !== 'total') ch.dataset.active = state.filters.has(sev);
+    ch.addEventListener('click', () => {
+      const s = ch.dataset.sev;
+      if (s === 'total') return;
+      if (state.filters.has(s)) state.filters.delete(s); else state.filters.add(s);
+      localStorage.setItem(LS.filters, JSON.stringify([...state.filters]));
+      ch.dataset.active = state.filters.has(s);
+      applyFilters();
+      recount();
     });
   });
 
-  $('btnRescan').onclick = () => vscode.postMessage({ type: 'rescan' });
-  $('btnExportMd').onclick = () => vscode.postMessage({ type: 'exportMd' });
-  $('btnExportJson').onclick = () => vscode.postMessage({ type: 'exportJson' });
+  // ordenar
+  $('#sort').value = state.sort;
+  $('#sort').addEventListener('change', () => {
+    state.sort = $('#sort').value;
+    localStorage.setItem(LS.sort, state.sort);
+    sortCards();
+  });
 
-  $('search').addEventListener('input', filter);
-  $('sort').addEventListener('change', sort);
+  // búsqueda con debounce
+  let tkSearch;
+  $('#search').addEventListener('input', () => {
+    clearTimeout(tkSearch);
+    tkSearch = setTimeout(() => applyFilters(), 80);
+  });
 
-  // acciones por card
-  document.querySelectorAll('[data-open]').forEach(btn => btn.addEventListener('click', e => {
-    const file = e.currentTarget.getAttribute('data-open');
-    const line = Number(e.currentTarget.getAttribute('data-line') || '0');
-    vscode.postMessage({ type: 'openFile', file, line });
-  }));
-  document.querySelectorAll('[data-copy]').forEach(btn => btn.addEventListener('click', e => {
-    vscode.postMessage({ type: 'copyDiff', diff: e.currentTarget.getAttribute('data-copy') });
-  }));
-  document.querySelectorAll('[data-apply]').forEach(btn => btn.addEventListener('click', e => {
-    vscode.postMessage({ type: 'applyDiff', fingerprint: e.currentTarget.getAttribute('data-apply') });
-  }));
-  document.querySelectorAll('[data-ignore]').forEach(btn => btn.addEventListener('click', e => {
-    vscode.postMessage({ type: 'toggleIgnore', fingerprint: e.currentTarget.getAttribute('data-ignore') });
-  }));
-  document.querySelectorAll('a.ref').forEach(a => a.addEventListener('click', e => {
-    e.preventDefault();
-    vscode.postMessage({ type: 'openExternal', url: e.currentTarget.getAttribute('data-href') });
-  }));
-  document.querySelectorAll('[data-issue]').forEach(btn => btn.addEventListener('click', e => {
-    vscode.postMessage({ type: 'createIssue', fingerprint: e.currentTarget.getAttribute('data-issue') });
-  }));
+  // acciones generales
+  $('#btnRescan').onclick = () => vscode.postMessage({ type: 'rescan' });
+  $('#btnExportMd').onclick = () => vscode.postMessage({ type: 'exportMd' });
+  $('#btnExportJson').onclick = () => vscode.postMessage({ type: 'exportJson' });
+  $('#btnExpand').onclick = () => toggleAll(true);
+  $('#btnCollapse').onclick = () => toggleAll(false);
+  $('#btnClear').onclick = () => { state.filters.clear(); localStorage.setItem(LS.filters,'[]'); $$('#chips .chip').forEach(c=>c.dataset.active=false); applyFilters(); recount(); };
 
-  window.addEventListener('message', ev => {
-    const m = ev.data;
-    if (m.type === 'toggleIgnore:result' && m.ok) {
-      const card = document.querySelector('.card[data-fp="'+m.fp+'"]');
-      if (card) card.remove();
+  // atajos: E expandir, C contraer, L limpiar, / foco búsqueda
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'E' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleAll(true); }
+    if (e.key === 'C' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleAll(false); }
+    if (e.key === 'L' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $('#btnClear').click(); }
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $('#search').focus(); }
+  });
+
+  // acciones por card (delegación)
+  $('#list').addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+
+    const btnOpen = t.closest('[data-open]');
+    if (btnOpen) {
+      vscode.postMessage({ type: 'openFile', file: btnOpen.getAttribute('data-open'), line: Number(btnOpen.getAttribute('data-line')||'0') });
+      return;
     }
-    if (m.type === 'applyDiff:result') {
-      const card = document.querySelector('.card[data-fp="'+m.fp+'"]');
-      if (card) card.style.outline = m.ok ? '2px solid #80e27e' : '2px solid #ef5350';
+    const btnCopy = t.closest('[data-copy]');
+    if (btnCopy) {
+      vscode.postMessage({ type: 'copyDiff', diff: btnCopy.getAttribute('data-copy') });
+      return;
+    }
+    const btnApply = t.closest('[data-apply]');
+    if (btnApply) {
+      vscode.postMessage({ type: 'applyDiff', fingerprint: btnApply.getAttribute('data-apply') });
+      return;
+    }
+    const btnIgnore = t.closest('[data-ignore]');
+    if (btnIgnore) {
+      vscode.postMessage({ type: 'toggleIgnore', fingerprint: btnIgnore.getAttribute('data-ignore') });
+      return;
+    }
+    const btnIssue = t.closest('[data-issue]');
+    if (btnIssue) {
+      vscode.postMessage({ type: 'createIssue', fingerprint: btnIssue.getAttribute('data-issue') });
+      return;
+    }
+    const ref = t.closest('a.ref');
+    if (ref) {
+      e.preventDefault();
+      vscode.postMessage({ type: 'openExternal', url: ref.getAttribute('data-href') });
+      return;
     }
   });
 
-  function sort() {
-    const how = $('sort').value;
-    const list = $('list');
-    const nodes = [...list.children];
+  // manejar <details> como acordeón con animación + persistencia
+  $$('#list details.card').forEach(d => {
+    const fp = d.dataset.fp;
+    const summary = $('.card-summary', d);
+    const content = $('.card-content', d);
+    const inner = $('.card-inner', d);
+
+    // inicia estado abierto si está en memoria o en hash
+    const hashOpen = new URLSearchParams(location.hash.replace(/^#/, '')).get('fp') === fp;
+    if (state.open.has(fp) || hashOpen) d.setAttribute('open','');
+
+    // altura animada
+    const setHeight = (h) => { content.style.height = h + 'px'; };
+    const openAnim = () => { content.style.height = 'auto'; const h = content.offsetHeight; content.style.height = '0px'; requestAnimationFrame(()=> setHeight(h)); };
+    const closeAnim = () => { setHeight(content.offsetHeight); requestAnimationFrame(()=> setHeight(0)); };
+
+    d.addEventListener('toggle', () => {
+      if (d.open) {
+        openAnim();
+        state.open.add(fp);
+        d.querySelector('.card-summary')?.setAttribute('aria-expanded','true');
+        // memoriza hash si el usuario lo abrió manualmente
+        history.replaceState(null, '', '#fp='+encodeURIComponent(fp));
+      } else {
+        closeAnim();
+        state.open.delete(fp);
+        d.querySelector('.card-summary')?.setAttribute('aria-expanded','false');
+        // limpia hash si coincide
+        const p = new URLSearchParams(location.hash.replace(/^#/, '')); if (p.get('fp') === fp) history.replaceState(null,'','#');
+      }
+      localStorage.setItem(LS.open, JSON.stringify([...state.open]));
+    });
+
+    // teclado accesible en summary (enter/space)
+    summary.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.open = !d.open; }
+      if (e.key === 'ArrowRight' && !d.open) { d.open = true; }
+      if (e.key === 'ArrowLeft' && d.open) { d.open = false; }
+    });
+
+    // al abrir por primera vez, recalcular altura tras layout
+    if (d.open) { requestAnimationFrame(()=> { content.style.height = 'auto'; }); }
+  });
+
+  // recibir mensajes del host
+  window.addEventListener('message', ev => {
+    const m = ev.data;
+    if (m.type === 'toggleIgnore:result' && m.ok) {
+      const card = document.querySelector('details.card[data-fp="'+m.fp+'"]');
+      if (card) {
+        card.classList.add('flash-ok');
+        setTimeout(()=>card.remove(), 140);
+        recount();
+      }
+    }
+    if (m.type === 'applyDiff:result') {
+      const card = document.querySelector('details.card[data-fp="'+m.fp+'"]');
+      if (card) {
+        card.classList.add(m.ok ? 'flash-ok' : 'flash-bad');
+        setTimeout(()=>card.classList.remove('flash-ok','flash-bad'), 600);
+      }
+    }
+  });
+
+  // inicializar vista
+  sortCards();
+  applyFilters();
+  recount();
+  // si venimos con hash, enfoca
+  const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const target = p.get('fp');
+  if (target) {
+    const el = document.querySelector('details.card[data-fp="'+target+'"]');
+    if (el) { el.scrollIntoView({block:'center'}); el.querySelector('.card-summary')?.focus({preventScroll:true}); }
+  }
+
+  function toggleAll(open){
+    $$('#list details.card').forEach(d => { d.open = open; });
+  }
+
+  function sortCards(){
+    const list = $('#list');
+    const nodes = Array.from(list.children);
     nodes.sort((a,b) => {
-      if (how === 'file') return a.dataset.rel.localeCompare(b.dataset.rel);
-      if (how === 'rule') return a.dataset.rule.localeCompare(b.dataset.rule);
+      const A = a.dataset, B = b.dataset;
+      if (state.sort === 'file') return A.rel.localeCompare(B.rel);
+      if (state.sort === 'rule') return A.rule.localeCompare(B.rule);
       const ord = ['critical','high','medium','low','info'];
-      return ord.indexOf(a.dataset.sev) - ord.indexOf(b.dataset.sev);
+      return ord.indexOf(A.sev) - ord.indexOf(B.sev);
     });
     list.replaceChildren(...nodes);
   }
 
-  function filter() {
-    const q = ($('search').value || '').toLowerCase();
+  function applyFilters(){
+    const q = ($('#search').value || '').toLowerCase();
     const active = state.filters;
-    [...document.querySelectorAll('.card')].forEach(card => {
+    let visible = 0;
+    $$('#list details.card').forEach(card => {
       const sev = card.dataset.sev;
-      const hay = !active.size || active.has(sev);
+      const matchesSev = !active.size || active.has(sev);
       const text = (card.innerText || '').toLowerCase();
-      const okQ = !q || text.includes(q);
-      card.style.display = (hay && okQ) ? '' : 'none';
+      const matchesQ = !q || text.includes(q);
+      const show = matchesSev && matchesQ;
+      (card as HTMLElement).style.display = show ? '' : 'none';
+      if (show) visible++;
     });
+    $('#count-total').textContent = String(visible);
   }
 
-  filter(); sort();
+  function recount(){
+    const counts = { critical:0, high:0, medium:0, low:0, info:0 };
+    $$('#list details.card').forEach(c => {
+      if ((c as HTMLElement).style.display === 'none') return;
+      const s = c.dataset.sev; if (s in counts) counts[s]++;
+    });
+    for (const sev of ['critical','high','medium','low','info']){
+      const chip = $('.chip.'+sev); if (!chip) continue;
+      let num = 0;
+      // contar sin filtro por texto (totales reales), más preciso recalculando sobre DOM original:
+      num = $$('#list details.card[data-sev="'+sev+'"]').length;
+      // si filtro de texto activo, contamos visibles
+      const q = ($('#search').value || '').trim();
+      if (q) num = $$('#list details.card[data-sev="'+sev+'"]').filter(el => (el as HTMLElement).style.display !== 'none').length;
+      chip.querySelector('strong + span')?.remove(); // limpieza si existiera
+      // añadir contador compacto
+      chip.appendChild(Object.assign(document.createElement('span'), {textContent: String(num)}));
+    }
+    // total visible:
+    $('#count-total').textContent = String($$('#list details.card').filter(el => (el as HTMLElement).style.display !== 'none').length);
+  }
 </script>
 </body>
 </html>`;
@@ -262,58 +513,116 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
 
 function renderCard(it: UIItem) {
   const sev = it.severity.toLowerCase();
-  const sevCls = `badge sev ${sev}`;
-  const ai = (it.calibrated && it.calibrated !== 'none') ? `<span class="badge ai">AI: ${escapeHtml(it.calibrated)}</span>` : '';
+  const sevCls = `sev ${sev}`;
+  const ai = (it.calibrated && it.calibrated !== 'none') ? `<span class="tag">AI: ${escapeHtml(it.calibrated)}</span>` : '';
   const conf = (typeof it.confidence === 'number') ? `<span class="tag">confidence: ${Math.round(it.confidence * 100)}%</span>` : '';
   const cwe = it.cwe ? `<span class="tag">CWE: ${escapeHtml(it.cwe)}</span>` : '';
   const owasp = it.owasp ? `<span class="tag">OWASP: ${escapeHtml(it.owasp)}</span>` : '';
 
-  const expl = it.explanation_md ? `<details open><summary>Explicación</summary><div>${mdToHtml(it.explanation_md)}</div></details>` : '';
-  const snip = it.snippet ? `<details><summary>Snippet</summary><pre>${escapeHtml(it.snippet)}</pre></details>` : '';
-  const diff = it.unified_diff ? `<details><summary>Propuesta de fix (diff)</summary><div class="row"><button class="btn" data-copy="${escapeAttr(it.unified_diff)}">Copy diff</button><button class="btn" data-apply="${escapeAttr(it.fingerprint)}">Try patch</button></div><pre>${escapeHtml(it.unified_diff)}</pre></details>` : '';
-  const tests = (it.tests || []).length ? `<details><summary>Tests sugeridos</summary><ul>${it.tests.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul></details>` : '';
-  const refs = (it.references || []).length ? `<details><summary>Referencias</summary><ul>${it.references.map(r => refItem(r)).join('')}</ul></details>` : '';
+  const expl = it.explanation_md ? `
+    <details class="block" open>
+      <summary>Explicación</summary>
+      <div class="card-inner"><div>${mdToHtml(it.explanation_md)}</div></div>
+    </details>` : '';
+
+  const snip = it.snippet ? `
+    <details class="block">
+      <summary>Snippet</summary>
+      <pre>${escapeHtml(it.snippet)}</pre>
+    </details>` : '';
+
+  const diff = it.unified_diff ? `
+    <details class="block">
+      <summary>Propuesta de fix (diff)</summary>
+      <div class="card-inner" style="gap:8px">
+        <div class="meta">
+          <button class="btn" data-copy="${escapeAttr(it.unified_diff)}">Copy diff</button>
+          <button class="btn" data-apply="${escapeAttr(it.fingerprint)}">Try patch</button>
+        </div>
+        <pre>${escapeHtml(it.unified_diff)}</pre>
+      </div>
+    </details>` : '';
+
+  const tests = (it.tests || []).length ? `
+    <details class="block">
+      <summary>Tests sugeridos</summary>
+      <div class="card-inner"><ul>${it.tests.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul></div>
+    </details>` : '';
+
+  const refs = (it.references || []).length ? `
+    <details class="block">
+      <summary>Referencias</summary>
+      <div class="card-inner"><ul class="refs">${it.references.map(r => refItem(r)).join('')}</ul></div>
+    </details>` : '';
 
   return `
-  <div class="card" data-sev="${escapeAttr(sev)}" data-rel="${escapeAttr(it.relFile)}" data-rule="${escapeAttr(it.ruleId)}" data-fp="${escapeAttr(it.fingerprint)}">
-    <div class="header">
-      <div>
+  <details class="card" role="listitem"
+    data-sev="${escapeAttr(sev)}"
+    data-rel="${escapeAttr(it.relFile)}"
+    data-rule="${escapeAttr(it.ruleId)}"
+    data-fp="${escapeAttr(it.fingerprint)}">
+    <summary class="card-summary" tabindex="0" aria-expanded="false" aria-controls="cnt-${escapeAttr(it.fingerprint)}">
+      <div class="head-left">
         <span class="${sevCls}">${sev.toUpperCase()}</span>
-        <strong style="margin-left:8px">${escapeHtml(it.relFile)}</strong>
-        <span class="muted">· ${escapeHtml(it.ruleId)}</span>
+        <div class="file" title="${escapeAttr(it.relFile)}">${escapeHtml(it.relFile)}</div>
+        <div class="rule">· ${escapeHtml(it.ruleId)}</div>
       </div>
-      <div class="row">
+      <div class="head-actions">
         ${ai}${conf}${cwe}${owasp}
         <button class="btn" data-open="${escapeAttr(it.file)}" data-line="${it.range.start.line}">Open</button>
-        <button class="btn" data-ignore="${escapeAttr(it.fingerprint)}">False Positive</button>
+        <button class="btn" data-ignore="${escapeAttr(it.fingerprint)}" title="Marcar como FP">False Positive</button>
         <button class="btn" data-issue="${escapeAttr(it.fingerprint)}">Create Issue</button>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.1 9.3a1 1 0 0 1 1.4 0L12 11.8l2.5-2.5a1 1 0 1 1 1.4 1.4l-3.2 3.2a1.5 1.5 0 0 1-2.1 0L8.1 10.7a1 1 0 0 1 0-1.4z" fill="currentColor"/></svg>
+      </div>
+    </summary>
+    <div id="cnt-${escapeAttr(it.fingerprint)}" class="card-content" role="region" aria-label="Contenido de vulnerabilidad">
+      <div class="card-inner">
+        <div class="msg">${escapeHtml(it.message || '')}</div>
+        ${expl}
+        ${snip}
+        ${diff}
+        ${tests}
+        ${refs}
       </div>
     </div>
-    <div class="muted" style="margin-top:6px">${escapeHtml(it.message || '')}</div>
-    ${expl}
-    ${snip}
-    ${diff}
-    ${tests}
-    ${refs}
-  </div>`;
+  </details>`;
 }
 
 function chip(sev: string, n: number) {
   const cls = `chip ${sev}`;
   const label = sev[0].toUpperCase() + sev.slice(1);
-  return `<div class="${cls}" data-sev="${sev}">${label}: ${n}</div>`;
+  return `<div class="${cls}" data-sev="${sev}" data-active="false" title="${label}">
+    <span class="dot"></span><strong>${label}</strong><span>${n}</span>
+  </div>`;
 }
 
 function countBySeverity(items: UIItem[]) {
   const map: Record<Sev, number> = { info: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const it of items) {map[it.severity] = (map[it.severity] || 0) + 1;}
+  for (const it of items) map[it.severity] = (map[it.severity] || 0) + 1;
   return map;
 }
 
-function escapeHtml(s: string) { return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]!); }
+/* ---------- helpers seguro para HTML/MD ---------- */
+function escapeHtml(s: string) {
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]!);
+}
 function escapeAttr(s: string) { return escapeHtml(s).replace(/\n/g,'\\n'); }
-function mdToHtml(md: string) { const fenced = md.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`); return fenced.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g,'<br>')}</p>`).join('\n'); }
-function refItem(r: string) { const url = String(r).trim(); const safe = /^https?:\/\//i.test(url) ? url : ''; const label = safe ? url.replace(/^https?:\/\//,'') : url; return safe ? `<li><a class="ref" data-href="${escapeAttr(safe)}">${escapeHtml(label)}</a></li>` : `<li>${escapeHtml(url)}</li>`; }
+function mdToHtml(md: string) {
+  // protege bloques ``` ```
+  const fenced = md.replace(/```([\\s\\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`);
+  // párrafos (sin permitir HTML crudo)
+  return fenced.split(/\\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\\n/g,'<br>')}</p>`).join('\\n');
+}
+function refItem(r: string) {
+  const url = String(r).trim();
+  const safe = /^https?:\/\//i.test(url) ? url : '';
+  const label = safe ? url.replace(/^https?:\/\//, '') : url;
+
+  return safe
+    ? `<li><a class="ref" data-href="${escapeAttr(safe)}">${escapeHtml(label)}</a></li>`
+    : `<li>${escapeHtml(url)}</li>`;
+}
+
 
 /* ---------- very light patch applier (best effort) ---------- */
 async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string): Promise<boolean> {
@@ -323,12 +632,12 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
     let text = doc.getText();
 
     // Fast path: single hunk replace using snippet
-    if (snippet && /^---[\s\S]*?\n\+\+\+[\s\S]*?@@/m.test(diff)) {
+    if (snippet && /^---[\\s\\S]*?\\n\\+\\+\\+[\\s\\S]*?@@/m.test(diff)) {
       const blocks = extractHunks(diff);
       if (blocks.length === 1) {
         const h = blocks[0];
-        const original = h.lines.filter(l => l.kind !== '+').map(l => l.txt).join('\n');
-        const added = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
+        const original = h.lines.filter(l => l.kind !== '+').map(l => l.txt).join('\\n');
+        const added = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\\n');
         if (snippet.includes(original.trim()) || text.includes(original.trim())) {
           const newText = text.replace(original, added);
           if (newText !== text) {
@@ -349,7 +658,7 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
       const before = doc.lineAt(Math.max(0, start)).range.start;
       const after = doc.lineAt(Math.min(doc.lineCount - 1, end - 1)).range.end;
       const oldBlock = doc.getText(new vscode.Range(before, after));
-      const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
+      const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\\n');
       if (!oldBlock.trim()) {return false;}
       const edit = new vscode.WorkspaceEdit();
       edit.replace(uri, new vscode.Range(before, after), newBlock);
@@ -362,13 +671,13 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
 }
 
 function extractHunks(diff: string) {
-  const lines = diff.split('\n');
+  const lines = diff.split('\\n');
   type L = { kind: ' '|'+'|'-'; txt: string };
   type H = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: L[] };
   const hunks: H[] = [];
   let i = 0;
   while (i < lines.length) {
-    const m = /^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/.exec(lines[i]);
+    const m = /^@@ -(\\d+),?(\\d+)? \\+(\\d+),?(\\d+)? @@/.exec(lines[i]);
     if (!m) { i++; continue; }
     let h: H = {
       oldStart: parseInt(m[1],10), oldLines: parseInt(m[2]||'1',10),
@@ -389,37 +698,44 @@ function extractHunks(diff: string) {
 export function renderMarkdown(items: UIItem[]) {
   const rows = items.map(it => {
     const header = `### [${it.severity.toUpperCase()}] ${it.relFile} — ${it.ruleId}`;
-    const cwe = it.cwe ? `\n- CWE: ${it.cwe}` : '';
-    const owasp = it.owasp ? `\n- OWASP: ${it.owasp}` : '';
-    const conf = (typeof it.confidence === 'number') ? `\n- Confidence: ${Math.round(it.confidence*100)}%` : '';
-    const cal = it.calibrated ? `\n- Calibrated: ${it.calibrated}` : '';
-    const expl = it.explanation_md ? `\n\n${it.explanation_md}\n` : '';
-    const snip = it.snippet ? `\n**Snippet**:\n\n\`\`\`\n${it.snippet}\n\`\`\`\n` : '';
-    const diff = it.unified_diff ? `\n**Propuesta de fix (diff)**:\n\n\`\`\`diff\n${it.unified_diff}\n\`\`\`\n` : '';
-    const tests = (it.tests||[]).length ? `\n**Tests sugeridos**:\n${it.tests.map(t => `- ${t}`).join('\n')}\n` : '';
-    const refs = (it.references||[]).length ? `\n**Referencias**:\n${it.references.map(r => `- ${r}`).join('\n')}\n` : '';
-    return `${header}\n- File: ${it.relFile}:${it.range.start.line+1}${cwe}${owasp}${conf}${cal}${expl}${snip}${diff}${tests}${refs}`;
-  }).join('\n\n');
+    const cwe = it.cwe ? `\\n- CWE: ${it.cwe}` : '';
+    const owasp = it.owasp ? `\\n- OWASP: ${it.owasp}` : '';
+    const conf = (typeof it.confidence === 'number') ? `\\n- Confidence: ${Math.round(it.confidence*100)}%` : '';
+    const cal = it.calibrated ? `\\n- Calibrated: ${it.calibrated}` : '';
+    const expl = it.explanation_md ? `\\n\\n${it.explanation_md}\\n` : '';
+    const snip = it.snippet ? `\\n**Snippet**:\\n\\n\\\`\\\`\\\`\\n${it.snippet}\\n\\\`\\\`\\\`\\n` : '';
+    const diff = it.unified_diff ? `\\n**Propuesta de fix (diff)**:\\n\\n\\\`\\\`\\\`diff\\n${it.unified_diff}\\n\\\`\\\`\\\`\\n` : '';
+    const tests = (it.tests||[]).length ? `\\n**Tests sugeridos**:\\n${it.tests.map(t => `- ${t}`).join('\\n')}\\n` : '';
+    const refs = (it.references||[]).length ? `\\n**Referencias**:\\n${it.references.map(r => `- ${r}`).join('\\n')}\\n` : '';
+    return `${header}\\n- File: ${it.relFile}:${it.range.start.line+1}${cwe}${owasp}${conf}${cal}${expl}${snip}${diff}${tests}${refs}`;
+  }).join('\\n\\n');
 
-  const totals = countBySeverity(items);
+  const totals = countBySeverity(items as any);
   const head = `# Security Report
 
 **Totals:** Critical: ${totals.critical} · High: ${totals.high} · Medium: ${totals.medium} · Low: ${totals.low} · Info: ${totals.info}
 
 `;
 
-  return head + rows + '\n';
+  return head + rows + '\\n';
 }
 
 async function buildGitHubIssueURL(root: string, it: UIItem): Promise<string | null> {
   try {
     const { execSync } = await import('node:child_process');
     const remote = String(execSync('git config --get remote.origin.url', { cwd: root })).trim();
+
+    // Match "owner/repo" desde URLs SSH o HTTPS
+    // ejemplos: git@github.com:owner/repo.git  |  https://github.com/owner/repo.git
     const m = /github\.com[:/](.+?)(?:\.git)?$/.exec(remote);
-    if (!m) {return null;}
+    if (!m) return null;
+
     const repo = m[1];
     const title = encodeURIComponent(`[${it.severity.toUpperCase()}] ${it.ruleId} — ${it.relFile}`);
     const body = encodeURIComponent(renderMarkdown([it]));
+
     return `https://github.com/${repo}/issues/new?title=${title}&body=${body}`;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }

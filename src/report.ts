@@ -116,19 +116,32 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
   const cards = items.map(renderCard).join('');
 
   return `<!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy"
   content="default-src 'none'; img-src ${webview.cspSource} https:;
            style-src ${webview.cspSource} 'unsafe-inline';
            script-src 'nonce-${nonce}';">
+<meta name="color-scheme" content="dark light">
+<title>Security Report</title>
 <style>
   :root{
     --bg:#0f1115; --panel:#12151c; --card:#151a22; --ink:#e8eaed; --muted:#9aa0a6; --border:#212735;
     --ring:#5b9dff;
     --crit:#ff3b5b; --high:#ff6a3d; --med:#ffbf38; --low:#3aa3ff; --info:#7f8ea3; --ok:#60d394;
+    --pad: clamp(10px, 2vw, 16px);
+    --radius: 14px;
+    --chip-h: 34px;
   }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f5f7fb; --panel:#ffffff; --card:#ffffff; --ink:#10131a; --muted:#5c667a; --border:#e5e9f2;
+      --ring:#2b6fff;
+    }
+  }
+
   *{box-sizing:border-box}
   html,body{height:100%}
   body{
@@ -137,62 +150,106 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
       radial-gradient(80rem 40rem at 10% -10%, rgba(61,126,255,.06), transparent 60%),
       radial-gradient(60rem 30rem at 90% -20%, rgba(255,123,61,.05), transparent 60%),
       var(--bg);
-    color:var(--ink); font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial;
+    color:var(--ink);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
 
+  /* ===== Topbar / Toolbar ===== */
   .topbar{
-    position:sticky; top:0; z-index:5;
+    position:sticky; top:0; z-index:10;
     backdrop-filter:saturate(140%) blur(6px);
-    background: linear-gradient(180deg, rgba(18,21,28,.85), rgba(18,21,28,.65));
+    background: linear-gradient(180deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel) 75%, transparent));
     border-bottom:1px solid var(--border);
   }
-  .wrap{max-width:1200px; margin:0 auto; padding:12px 16px;}
-  .top{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
-
-  .chips{ display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
-  .chip{
-    display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
-    border-radius:999px; font-weight:700; font-size:12px; cursor:pointer; user-select:none;
-    border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.04);
-    transition:transform .12s ease, background-color .15s ease, border-color .15s ease;
+  .wrap{max-width:1200px; margin:0 auto; padding:var(--pad);}
+  .top{ display:grid; grid-template-columns: 1fr auto; gap:12px; align-items:center; }
+  @media (max-width: 900px){
+    .top{ grid-template-columns: 1fr; gap:10px; }
   }
-  .chip[data-active="true"]{ outline:2px solid rgba(255,255,255,.15) }
+
+  /* Chips: carrusel en móvil */
+  .chips{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    scroll-snap-type: x mandatory;
+    overflow:auto; padding-bottom:2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  @media (max-width: 680px){
+    .chips{ flex-wrap:nowrap; }
+  }
+  .chips::-webkit-scrollbar{ height:6px }
+  .chips::-webkit-scrollbar-thumb{ background: color-mix(in oklab, var(--muted) 25%, transparent); border-radius:999px }
+
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; height: var(--chip-h);
+    padding:0 10px; border-radius:999px; font-weight:700; font-size:12px; cursor:pointer; user-select:none;
+    border:1px solid color-mix(in oklab, var(--border) 80%, transparent);
+    background: color-mix(in oklab, var(--panel) 85%, transparent);
+    transition:transform .12s ease, background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+    scroll-snap-align: start;
+  }
+  .chip[data-active="true"]{ box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 50%, transparent) inset }
   .chip:hover{ transform:translateY(-1px) }
-  .chip.critical{ background: color-mix(in oklab, var(--crit) 20%, transparent); border-color: color-mix(in oklab, var(--crit) 35%, transparent) }
-  .chip.high{ background: color-mix(in oklab, var(--high) 20%, transparent); border-color: color-mix(in oklab, var(--high) 35%, transparent) }
-  .chip.medium{ background: color-mix(in oklab, var(--med) 20%, transparent); border-color: color-mix(in oklab, var(--med) 35%, transparent) }
-  .chip.low{ background: color-mix(in oklab, var(--low) 20%, transparent); border-color: color-mix(in oklab, var(--low) 35%, transparent) }
-  .chip.info{ background: color-mix(in oklab, var(--info) 20%, transparent); border-color: color-mix(in oklab, var(--info) 35%, transparent) }
+  .chip.critical{ background: color-mix(in oklab, var(--crit) 18%, transparent); border-color: color-mix(in oklab, var(--crit) 35%, transparent) }
+  .chip.high{ background: color-mix(in oklab, var(--high) 18%, transparent); border-color: color-mix(in oklab, var(--high) 35%, transparent) }
+  .chip.medium{ background: color-mix(in oklab, var(--med) 18%, transparent); border-color: color-mix(in oklab, var(--med) 35%, transparent) }
+  .chip.low{ background: color-mix(in oklab, var(--low) 18%, transparent); border-color: color-mix(in oklab, var(--low) 35%, transparent) }
+  .chip.info{ background: color-mix(in oklab, var(--info) 18%, transparent); border-color: color-mix(in oklab, var(--info) 35%, transparent) }
   .chip .dot{width:8px; height:8px; border-radius:999px; display:inline-block}
   .chip.critical .dot{background:var(--crit)} .chip.high .dot{background:var(--high)}
   .chip.medium .dot{background:var(--med)} .chip.low .dot{background:var(--low)} .chip.info .dot{background:var(--info)}
-
-  .toolbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .muted{ color:var(--muted) }
 
+  .toolbar{
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end;
+  }
+  @media (max-width: 900px){
+    .toolbar{ justify-content:space-between; }
+  }
   .btn{
-    display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:10px;
-    border:1px solid var(--border); background:linear-gradient(180deg, #1a1f29, #161b24);
-    color:#e6eefc; cursor:pointer; transition:transform .12s ease, box-shadow .2s ease, border-color .15s ease;
-    user-select:none;
+    display:inline-flex; align-items:center; gap:6px; padding:8px 11px; border-radius:10px;
+    border:1px solid var(--border); background:linear-gradient(180deg, color-mix(in oklab, var(--panel) 90%, black 6%), color-mix(in oklab, var(--panel) 80%, black 12%));
+    color:inherit; cursor:pointer; transition:transform .12s ease, box-shadow .2s ease, border-color .15s ease, background .2s ease;
+    user-select:none; min-height:34px;
   }
   .btn:hover{ transform:translateY(-1px) }
   .btn:focus-visible{ outline:2px solid var(--ring); outline-offset:2px }
   .btn.ghost{ background:transparent }
 
   input[type="search"], select{
-    background:#0f1320; color:#e8eefc; border:1px solid var(--border); border-radius:10px; padding:8px 10px;
+    background: color-mix(in oklab, var(--panel) 78%, black 14%); color:inherit;
+    border:1px solid var(--border); border-radius:10px; padding:8px 10px; min-height:34px;
   }
-  input[type="search"]::placeholder{color:#78839b}
+  input[type="search"]::placeholder{color: color-mix(in oklab, var(--muted) 80%, transparent)}
+  @media (max-width: 680px){
+    input[type="search"]{ flex:1; min-width: 0; }
+  }
 
-  .list{ max-width:1200px; margin:12px auto; padding:0 16px; display:flex; flex-direction:column; gap:10px; }
+  /* Menú colapsable "Más" en móvil */
+  .more{ display:none }
+  @media (max-width: 680px){
+    .more{ display:inline-block }
+    .toolbar .btn[data-role="export"], .toolbar .btn[data-role="expand"], .toolbar .btn[data-role="collapse"]{ display:none }
+    .more summary{
+      list-style:none; cursor:pointer; border:1px solid var(--border); border-radius:10px; padding:8px 11px;
+      background:linear-gradient(180deg, color-mix(in oklab, var(--panel) 90%, black 6%), color-mix(in oklab, var(--panel) 80%, black 12%));
+    }
+    .more summary::-webkit-details-marker{ display:none }
+    .more .menu{
+      margin-top:6px; padding:6px; background:var(--panel); border:1px solid var(--border); border-radius:10px; display:grid; gap:6px;
+    }
+  }
 
-  /* ---- Card (details) ---- */
+  /* ===== List & Cards ===== */
+  .list{ max-width:1200px; margin:12px auto; padding:0 var(--pad); display:flex; flex-direction:column; gap:10px; }
+
   details.card{
-    border:1px solid var(--border); border-radius:14px; background:linear-gradient(180deg, #121823, #0f1420);
+    border:1px solid var(--border); border-radius:var(--radius);
+    background:linear-gradient(180deg, color-mix(in oklab, var(--card) 92%, transparent), color-mix(in oklab, var(--card) 82%, transparent));
     overflow:hidden; transition:border-color .2s ease, background .25s ease;
   }
-  details.card[open]{ background:linear-gradient(180deg, #151b27, #101626) }
+  details.card[open]{ background:linear-gradient(180deg, color-mix(in oklab, var(--card) 96%, transparent), color-mix(in oklab, var(--card) 88%, transparent)) }
   details.card:focus-within{ outline:2px solid var(--ring); outline-offset:2px }
 
   .card-summary{
@@ -203,59 +260,82 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
   .file{ font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .rule{ color:var(--muted) }
 
-  .sev{ font-size:11px; font-weight:800; padding:4px 8px; border-radius:8px; text-transform:uppercase; letter-spacing:.02em }
+  .sev{ font-size:11px; font-weight:800; padding:4px 8px; border-radius:8px; text-transform:uppercase; letter-spacing:.02em; color:#0b0b0c }
+  @media (prefers-color-scheme: dark){
+    .sev{ color:#fff }
+  }
   .sev.critical{ background:var(--crit) } .sev.high{ background:var(--high) } .sev.medium{ background:var(--med) }
   .sev.low{ background:var(--low) } .sev.info{ background:var(--info) }
 
   .head-actions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
-  .tag{ background:#1b2230; border:1px solid #24314a; padding:3px 8px; border-radius:999px; font-size:12px; color:#c8d4ea }
+  .tag{ background: color-mix(in oklab, var(--panel) 80%, black 10%); border:1px solid color-mix(in oklab, var(--border) 70%, transparent); padding:3px 8px; border-radius:999px; font-size:12px; color:inherit }
 
   .chev{ width:12px; height:12px; transform:rotate(-90deg); transition:transform .2s ease; opacity:.85 }
   details[open] .chev{ transform:rotate(0) }
 
-  /* smooth content open/close */
-  .card-content{
-    overflow:hidden; height:0; transition:height .22s ease;
-  }
+  /* Animación de contenido */
+  .card-content{ overflow:hidden; height:0; transition:height .22s ease; }
   details[open] .card-content{ height:auto }
   .card-inner{ padding:10px 14px 14px 14px; display:grid; gap:10px }
 
-  .msg{ color:#cfe0ff; opacity:.9 }
+  .msg{ color: color-mix(in oklab, #cfe0ff 90%, transparent) }
 
-  details.block{ margin-top:4px; border:1px solid #24314a; border-radius:10px; overflow:hidden }
-  details.block summary{ padding:8px 10px; cursor:pointer; background:#131a28; color:#d2dcf4; list-style:none }
+  details.block{ margin-top:4px; border:1px solid color-mix(in oklab, var(--border) 70%, transparent); border-radius:10px; overflow:hidden }
+  details.block summary{ padding:8px 10px; cursor:pointer; background: color-mix(in oklab, var(--panel) 86%, transparent); color:inherit; list-style:none }
   details.block summary::-webkit-details-marker{ display:none }
-  details.block[open]{ background:#0f1522 }
+  details.block[open]{ background: color-mix(in oklab, var(--panel) 92%, transparent) }
   pre{
-    background:#0b101a; border-top:1px solid #1a2438; margin:0; padding:10px; border-radius:0 0 10px 10px; overflow:auto;
+    background: color-mix(in oklab, var(--panel) 76%, black 10%); border-top:1px solid color-mix(in oklab, var(--border) 70%, transparent);
+    margin:0; padding:10px; border-radius:0 0 10px 10px; overflow:auto;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size:12px;
   }
   ul.refs{ margin:8px 0 0 18px; padding:0 }
-  a.ref{ color:#9ecbff; text-decoration:none }
+  a.ref{ color:#2b89ff; text-decoration:none }
   a.ref:focus-visible{ outline:2px solid var(--ring); outline-offset:2px }
 
-  /* visual feedback */
+  /* Visual feedback */
   .flash-ok{ box-shadow: 0 0 0 2px var(--ok) inset }
   .flash-bad{ box-shadow: 0 0 0 2px #ef5350 inset }
 
-  /* footer note row inside summary */
-  .meta{ display:flex; align-items:center; gap:8px; color:#91a1bf; flex-wrap:wrap }
+  /* Metadata en summary */
+  .meta{ display:flex; align-items:center; gap:8px; color: color-mix(in oklab, var(--muted) 90%, transparent); flex-wrap:wrap }
 
-  /* helper */
+  /* Accesibilidad */
   .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0 }
+
+  /* Responsive tweaks */
+  @media (max-width: 900px){
+    .head-actions .btn{ padding:7px 9px }
+    .file{ max-width: 40vw }
+  }
+  @media (max-width: 680px){
+    .card-summary{ align-items:flex-start; gap:10px }
+    .head-left{ flex-wrap:wrap }
+    .file{ max-width: 70vw }
+    .head-actions{ width:100%; justify-content: flex-start }
+    .tag{ font-size:11px }
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce){
+    *{ animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
   <div class="topbar">
     <div class="wrap">
       <div class="top" role="region" aria-label="Security Report toolbar">
-        <div class="chips" id="chips">
-          <div class="chip" id="chip-total" data-sev="total" title="Total">
-            <span class="dot" style="background:#9fb2d2"></span><strong>Total</strong><span id="count-total">${total}</span>
+        <div>
+          <div class="chips" id="chips">
+            <div class="chip" id="chip-total" data-sev="total" title="Total">
+              <span class="dot" style="background:#9fb2d2"></span><strong>Total</strong><span id="count-total">${total}</span>
+            </div>
+            ${chips}
           </div>
-          ${chips}
-          <span class="muted" id="meta">${escapeHtml(metaLine)}</span>
+          <div class="muted" id="meta" style="margin-top:6px">${escapeHtml(metaLine)}</div>
         </div>
+
         <div class="toolbar">
           <input id="search" type="search" placeholder="Buscar…" aria-label="Buscar" />
           <select id="sort" aria-label="Ordenar">
@@ -263,12 +343,24 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
             <option value="file">Ordenar: archivo</option>
             <option value="rule">Ordenar: regla</option>
           </select>
-          <button id="btnExpand" class="btn" title="Expandir todo (E)">Expand all</button>
-          <button id="btnCollapse" class="btn ghost" title="Contraer todo (C)">Collapse all</button>
-          <button id="btnClear" class="btn ghost" title="Limpiar filtros (L)">Limpiar filtros</button>
-          <button id="btnRescan" class="btn">Rescan</button>
-          <button id="btnExportMd" class="btn">Export MD</button>
-          <button id="btnExportJson" class="btn">Export JSON</button>
+
+          <button id="btnExpand" class="btn" data-role="expand" title="Expandir todo (E)">Expandir</button>
+          <button id="btnCollapse" class="btn ghost" data-role="collapse" title="Contraer todo (C)">Contraer</button>
+
+          <details class="more">
+            <summary>Más</summary>
+            <div class="menu">
+              <button id="btnExportMd_m" class="btn" data-role="export">Export MD</button>
+              <button id="btnExportJson_m" class="btn" data-role="export">Export JSON</button>
+              <button id="btnClear_m" class="btn">Limpiar filtros</button>
+              <button id="btnRescan_m" class="btn">Rescan</button>
+            </div>
+          </details>
+
+          <button id="btnRescan" class="btn" title="Re-escanear">Rescan</button>
+          <button id="btnExportMd" class="btn" data-role="export">Export MD</button>
+          <button id="btnExportJson" class="btn" data-role="export">Export JSON</button>
+          <button id="btnClear" class="btn ghost" title="Limpiar filtros (L)">Limpiar</button>
         </div>
       </div>
     </div>
@@ -283,7 +375,7 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
   const LS = {
     filters: 'vulnscan.filters',
     sort: 'vulnscan.sort',
-    open: 'vulnscan.open', // array de fingerprints abiertas
+    open: 'vulnscan.open',
   };
 
   const state = {
@@ -292,7 +384,7 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     sort: localStorage.getItem(LS.sort) || 'sev',
   };
 
-  // chips interactivas
+  /* ===== Chips interactivas ===== */
   $$('#chips .chip').forEach(ch => {
     const sev = ch.dataset.sev;
     if (sev && sev !== 'total') ch.dataset.active = state.filters.has(sev);
@@ -307,7 +399,7 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     });
   });
 
-  // ordenar
+  /* ===== Ordenar ===== */
   $('#sort').value = state.sort;
   $('#sort').addEventListener('change', () => {
     state.sort = $('#sort').value;
@@ -315,30 +407,46 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     sortCards();
   });
 
-  // búsqueda con debounce
+  /* ===== Búsqueda con debounce ===== */
   let tkSearch;
   $('#search').addEventListener('input', () => {
     clearTimeout(tkSearch);
     tkSearch = setTimeout(() => applyFilters(), 80);
   });
 
-  // acciones generales
-  $('#btnRescan').onclick = () => vscode.postMessage({ type: 'rescan' });
-  $('#btnExportMd').onclick = () => vscode.postMessage({ type: 'exportMd' });
-  $('#btnExportJson').onclick = () => vscode.postMessage({ type: 'exportJson' });
-  $('#btnExpand').onclick = () => toggleAll(true);
-  $('#btnCollapse').onclick = () => toggleAll(false);
-  $('#btnClear').onclick = () => { state.filters.clear(); localStorage.setItem(LS.filters,'[]'); $$('#chips .chip').forEach(c=>c.dataset.active=false); applyFilters(); recount(); };
+  /* ===== Acciones generales ===== */
+  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
 
-  // atajos: E expandir, C contraer, L limpiar, / foco búsqueda
+  bind('btnRescan', () => vscode.postMessage({ type: 'rescan' }));
+  bind('btnExportMd', () => vscode.postMessage({ type: 'exportMd' }));
+  bind('btnExportJson', () => vscode.postMessage({ type: 'exportJson' }));
+  bind('btnExpand', () => toggleAll(true));
+  bind('btnCollapse', () => toggleAll(false));
+  bind('btnClear', () => clearFilters());
+
+  // Menú móvil
+  bind('btnRescan_m', () => vscode.postMessage({ type: 'rescan' }));
+  bind('btnExportMd_m', () => vscode.postMessage({ type: 'exportMd' }));
+  bind('btnExportJson_m', () => vscode.postMessage({ type: 'exportJson' }));
+  bind('btnClear_m', () => clearFilters());
+
+  function clearFilters(){
+    state.filters.clear();
+    localStorage.setItem(LS.filters,'[]');
+    $$('#chips .chip').forEach(c=>c.dataset.active = false);
+    $('#search').value = '';
+    applyFilters(); recount();
+  }
+
+  /* ===== Atajos ===== */
   window.addEventListener('keydown', (e) => {
     if (e.key === 'E' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleAll(true); }
     if (e.key === 'C' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleAll(false); }
-    if (e.key === 'L' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $('#btnClear').click(); }
+    if (e.key === 'L' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); clearFilters(); }
     if (e.key === '/' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $('#search').focus(); }
   });
 
-  // acciones por card (delegación)
+  /* ===== Delegación de eventos en lista ===== */
   $('#list').addEventListener('click', (e) => {
     const t = e.target;
     if (!(t instanceof Element)) return;
@@ -376,18 +484,17 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     }
   });
 
-  // manejar <details> como acordeón con animación + persistencia
+  /* ===== Cards <details> con persistencia ===== */
   $$('#list details.card').forEach(d => {
     const fp = d.dataset.fp;
     const summary = $('.card-summary', d);
     const content = $('.card-content', d);
-    const inner = $('.card-inner', d);
 
-    // inicia estado abierto si está en memoria o en hash
+    // Abierta si estaba guardada o viene en hash
     const hashOpen = new URLSearchParams(location.hash.replace(/^#/, '')).get('fp') === fp;
     if (state.open.has(fp) || hashOpen) d.setAttribute('open','');
 
-    // altura animada
+    // Animación de altura (medida una sola vez para evitar thrash)
     const setHeight = (h) => { content.style.height = h + 'px'; };
     const openAnim = () => { content.style.height = 'auto'; const h = content.offsetHeight; content.style.height = '0px'; requestAnimationFrame(()=> setHeight(h)); };
     const closeAnim = () => { setHeight(content.offsetHeight); requestAnimationFrame(()=> setHeight(0)); };
@@ -396,31 +503,28 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
       if (d.open) {
         openAnim();
         state.open.add(fp);
-        d.querySelector('.card-summary')?.setAttribute('aria-expanded','true');
-        // memoriza hash si el usuario lo abrió manualmente
+        summary?.setAttribute('aria-expanded','true');
         history.replaceState(null, '', '#fp='+encodeURIComponent(fp));
       } else {
         closeAnim();
         state.open.delete(fp);
-        d.querySelector('.card-summary')?.setAttribute('aria-expanded','false');
-        // limpia hash si coincide
+        summary?.setAttribute('aria-expanded','false');
         const p = new URLSearchParams(location.hash.replace(/^#/, '')); if (p.get('fp') === fp) history.replaceState(null,'','#');
       }
       localStorage.setItem(LS.open, JSON.stringify([...state.open]));
     });
 
-    // teclado accesible en summary (enter/space)
+    // Teclado accesible
     summary.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.open = !d.open; }
       if (e.key === 'ArrowRight' && !d.open) { d.open = true; }
       if (e.key === 'ArrowLeft' && d.open) { d.open = false; }
     });
 
-    // al abrir por primera vez, recalcular altura tras layout
     if (d.open) { requestAnimationFrame(()=> { content.style.height = 'auto'; }); }
   });
 
-  // recibir mensajes del host
+  /* ===== Mensajes del host ===== */
   window.addEventListener('message', ev => {
     const m = ev.data;
     if (m.type === 'toggleIgnore:result' && m.ok) {
@@ -440,11 +544,11 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     }
   });
 
-  // inicializar vista
+  /* ===== Init ===== */
   sortCards();
   applyFilters();
   recount();
-  // si venimos con hash, enfoca
+
   const p = new URLSearchParams(location.hash.replace(/^#/, ''));
   const target = p.get('fp');
   if (target) {
@@ -461,10 +565,10 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
     const nodes = Array.from(list.children);
     nodes.sort((a,b) => {
       const A = a.dataset, B = b.dataset;
-      if (state.sort === 'file') return A.rel.localeCompare(B.rel);
-      if (state.sort === 'rule') return A.rule.localeCompare(B.rule);
+      if (state.sort === 'file') return (A.rel||'').localeCompare(B.rel||'');
+      if (state.sort === 'rule') return (A.rule||'').localeCompare(B.rule||'');
       const ord = ['critical','high','medium','low','info'];
-      return ord.indexOf(A.sev) - ord.indexOf(B.sev);
+      return ord.indexOf(A.sev||'') - ord.indexOf(B.sev||'');
     });
     list.replaceChildren(...nodes);
   }
@@ -479,32 +583,22 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
       const text = (card.innerText || '').toLowerCase();
       const matchesQ = !q || text.includes(q);
       const show = matchesSev && matchesQ;
-      (card as HTMLElement).style.display = show ? '' : 'none';
+      card.style.display = show ? '' : 'none';
       if (show) visible++;
     });
     $('#count-total').textContent = String(visible);
   }
 
   function recount(){
-    const counts = { critical:0, high:0, medium:0, low:0, info:0 };
-    $$('#list details.card').forEach(c => {
-      if ((c as HTMLElement).style.display === 'none') return;
-      const s = c.dataset.sev; if (s in counts) counts[s]++;
-    });
+    const q = ($('#search').value || '').trim();
     for (const sev of ['critical','high','medium','low','info']){
       const chip = $('.chip.'+sev); if (!chip) continue;
-      let num = 0;
-      // contar sin filtro por texto (totales reales), más preciso recalculando sobre DOM original:
-      num = $$('#list details.card[data-sev="'+sev+'"]').length;
-      // si filtro de texto activo, contamos visibles
-      const q = ($('#search').value || '').trim();
-      if (q) num = $$('#list details.card[data-sev="'+sev+'"]').filter(el => (el as HTMLElement).style.display !== 'none').length;
-      chip.querySelector('strong + span')?.remove(); // limpieza si existiera
-      // añadir contador compacto
+      let num = $$('#list details.card[data-sev="'+sev+'"]').length;
+      if (q) num = $$('#list details.card[data-sev="'+sev+'"]').filter(el => el.style.display !== 'none').length;
+      const old = chip.querySelector('strong + span'); if (old) old.remove();
       chip.appendChild(Object.assign(document.createElement('span'), {textContent: String(num)}));
     }
-    // total visible:
-    $('#count-total').textContent = String($$('#list details.card').filter(el => (el as HTMLElement).style.display !== 'none').length);
+    $('#count-total').textContent = String($$('#list details.card').filter(el => el.style.display !== 'none').length);
   }
 </script>
 </body>
@@ -609,9 +703,9 @@ function escapeHtml(s: string) {
 function escapeAttr(s: string) { return escapeHtml(s).replace(/\n/g,'\\n'); }
 function mdToHtml(md: string) {
   // protege bloques ``` ```
-  const fenced = md.replace(/```([\\s\\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`);
+  const fenced = md.replace(/```([\s\S]*?)```/g, (_m, code) => `<pre>${escapeHtml(code)}</pre>`);
   // párrafos (sin permitir HTML crudo)
-  return fenced.split(/\\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\\n/g,'<br>')}</p>`).join('\\n');
+  return fenced.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g,'<br>')}</p>`).join('\n');
 }
 function refItem(r: string) {
   const url = String(r).trim();
@@ -623,8 +717,7 @@ function refItem(r: string) {
     : `<li>${escapeHtml(url)}</li>`;
 }
 
-
-/* ---------- very light patch applier (best effort) ---------- */
+/* ---------- Aplicador de patch simple ---------- */
 async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string): Promise<boolean> {
   try {
     const uri = vscode.Uri.file(file);
@@ -632,12 +725,12 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
     let text = doc.getText();
 
     // Fast path: single hunk replace using snippet
-    if (snippet && /^---[\\s\\S]*?\\n\\+\\+\\+[\\s\\S]*?@@/m.test(diff)) {
+    if (snippet && /^---[\s\S]*?\n\+\+\+[\s\S]*?@@/m.test(diff)) {
       const blocks = extractHunks(diff);
       if (blocks.length === 1) {
         const h = blocks[0];
-        const original = h.lines.filter(l => l.kind !== '+').map(l => l.txt).join('\\n');
-        const added = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\\n');
+        const original = h.lines.filter(l => l.kind !== '+').map(l => l.txt).join('\n');
+        const added = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
         if (snippet.includes(original.trim()) || text.includes(original.trim())) {
           const newText = text.replace(original, added);
           if (newText !== text) {
@@ -658,7 +751,7 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
       const before = doc.lineAt(Math.max(0, start)).range.start;
       const after = doc.lineAt(Math.min(doc.lineCount - 1, end - 1)).range.end;
       const oldBlock = doc.getText(new vscode.Range(before, after));
-      const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\\n');
+      const newBlock = h.lines.filter(l => l.kind !== '-').map(l => l.txt).join('\n');
       if (!oldBlock.trim()) {return false;}
       const edit = new vscode.WorkspaceEdit();
       edit.replace(uri, new vscode.Range(before, after), newBlock);
@@ -671,13 +764,13 @@ async function tryApplyUnifiedDiff(file: string, diff: string, snippet?: string)
 }
 
 function extractHunks(diff: string) {
-  const lines = diff.split('\\n');
+  const lines = diff.split('\n');
   type L = { kind: ' '|'+'|'-'; txt: string };
   type H = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: L[] };
   const hunks: H[] = [];
   let i = 0;
   while (i < lines.length) {
-    const m = /^@@ -(\\d+),?(\\d+)? \\+(\\d+),?(\\d+)? @@/.exec(lines[i]);
+    const m = /^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@/.exec(lines[i]);
     if (!m) { i++; continue; }
     let h: H = {
       oldStart: parseInt(m[1],10), oldLines: parseInt(m[2]||'1',10),
@@ -698,17 +791,17 @@ function extractHunks(diff: string) {
 export function renderMarkdown(items: UIItem[]) {
   const rows = items.map(it => {
     const header = `### [${it.severity.toUpperCase()}] ${it.relFile} — ${it.ruleId}`;
-    const cwe = it.cwe ? `\\n- CWE: ${it.cwe}` : '';
-    const owasp = it.owasp ? `\\n- OWASP: ${it.owasp}` : '';
-    const conf = (typeof it.confidence === 'number') ? `\\n- Confidence: ${Math.round(it.confidence*100)}%` : '';
-    const cal = it.calibrated ? `\\n- Calibrated: ${it.calibrated}` : '';
-    const expl = it.explanation_md ? `\\n\\n${it.explanation_md}\\n` : '';
-    const snip = it.snippet ? `\\n**Snippet**:\\n\\n\\\`\\\`\\\`\\n${it.snippet}\\n\\\`\\\`\\\`\\n` : '';
-    const diff = it.unified_diff ? `\\n**Propuesta de fix (diff)**:\\n\\n\\\`\\\`\\\`diff\\n${it.unified_diff}\\n\\\`\\\`\\\`\\n` : '';
-    const tests = (it.tests||[]).length ? `\\n**Tests sugeridos**:\\n${it.tests.map(t => `- ${t}`).join('\\n')}\\n` : '';
-    const refs = (it.references||[]).length ? `\\n**Referencias**:\\n${it.references.map(r => `- ${r}`).join('\\n')}\\n` : '';
-    return `${header}\\n- File: ${it.relFile}:${it.range.start.line+1}${cwe}${owasp}${conf}${cal}${expl}${snip}${diff}${tests}${refs}`;
-  }).join('\\n\\n');
+    const cwe = it.cwe ? `\n- CWE: ${it.cwe}` : '';
+    const owasp = it.owasp ? `\n- OWASP: ${it.owasp}` : '';
+    const conf = (typeof it.confidence === 'number') ? `\n- Confidence: ${Math.round(it.confidence*100)}%` : '';
+    const cal = it.calibrated ? `\n- Calibrated: ${it.calibrated}` : '';
+    const expl = it.explanation_md ? `\n\n${it.explanation_md}\n` : '';
+    const snip = it.snippet ? `\n**Snippet**:\n\n\`\`\`\n${it.snippet}\n\`\`\`\n` : '';
+    const diff = it.unified_diff ? `\n**Propuesta de fix (diff)**:\n\n\`\`\`diff\n${it.unified_diff}\n\`\`\`\n` : '';
+    const tests = (it.tests||[]).length ? `\n**Tests sugeridos**:\n${it.tests.map(t => `- ${t}`).join('\n')}\n` : '';
+    const refs = (it.references||[]).length ? `\n**Referencias**:\n${it.references.map(r => `- ${r}`).join('\n')}\n` : '';
+    return `${header}\n- File: ${it.relFile}:${it.range.start.line+1}${cwe}${owasp}${conf}${cal}${expl}${snip}${diff}${tests}${refs}`;
+  }).join('\n\n');
 
   const totals = countBySeverity(items as any);
   const head = `# Security Report
@@ -717,7 +810,7 @@ export function renderMarkdown(items: UIItem[]) {
 
 `;
 
-  return head + rows + '\\n';
+  return head + rows + '\n';
 }
 
 async function buildGitHubIssueURL(root: string, it: UIItem): Promise<string | null> {

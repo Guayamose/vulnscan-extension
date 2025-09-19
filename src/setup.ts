@@ -72,7 +72,7 @@ export async function openSetupWizard(ctx: vscode.ExtensionContext) {
     }
   }
 
-  // ——— mensajes desde WebView ———
+  // mensajes desde WebView
   panel.webview.onDidReceiveMessage(async (m) => {
     switch (m.type) {
       case 'recheck': {

@@ -22,7 +22,7 @@ export type UIItem = {
   tests: string[];
 };
 
-const IGNORED_KEY = 'vulnscan/ignored';
+const IGNORED_KEY = 'oryon/ignored';
 const SEV_ORDER: Sev[] = ['critical','high','medium','low','info'];
 
 export function openSecurityReport(
@@ -373,9 +373,9 @@ function renderHTML(webview: vscode.Webview, root: string, items: UIItem[], meta
   const $ = (sel, root=document) => root.querySelector(sel);
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const LS = {
-    filters: 'vulnscan.filters',
-    sort: 'vulnscan.sort',
-    open: 'vulnscan.open',
+    filters: 'oryon.filters',
+    sort: 'oryon.sort',
+    open: 'oryon.open',
   };
 
   const state = {

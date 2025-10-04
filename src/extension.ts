@@ -22,10 +22,9 @@ export async function activate(context: vscode.ExtensionContext) {
       (cfg.get('backend.baseUrl') as string) ??
       'https://vulnscan-mock-df9c85d690d0.herokuapp.com';
 
-    // ⚠️ IMPORTANTE: crear AuthManager y REGISTRAR VISTAS ANTES DE CUALQUIER await
+    // Views
     const auth = new AuthManager(context, baseUrl);
 
-    // 1) Registrar vistas inmediatamente (sin esperar a init)
     const authProvider = new AuthViewProvider(context, auth);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(AuthViewProvider.viewId, authProvider)
@@ -37,13 +36,12 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     out.appendLine('[oryon] webview providers registered');
 
-    // 2) Lanzar init en background (no bloquear el registro de vistas)
+    // Auth init
     auth.init().catch((e: any) => {
       out.appendLine('[oryon] auth.init() failed: ' + (e?.message || e));
       vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', false);
     });
 
-    // Helper: requiere login
     function requireAuth<T extends any[]>(fn: (...a: T) => any) {
       return async (...a: T) => {
         if (!(await auth.isLoggedIn())) {
@@ -102,6 +100,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const files = await collectFiles(target);
       if (!files.length) {
         vscode.window.showInformationMessage('No hay archivos que coincidan con los filtros.');
+        resultsProvider.postSummary({ total: 0, high: 0, medium: 0, low: 0, message: 'Sin archivos a analizar.' });
         return;
       }
 
@@ -115,7 +114,8 @@ export async function activate(context: vscode.ExtensionContext) {
         const chunk = files.slice(i, i + batchSize);
         const r = await runSemgrepOnFiles(chunk, configs, {
           timeoutSec,
-          onDebug: m => out.appendLine(m)
+          onDebug: m => out.appendLine(m),
+          semgrepBin: (cfg.get('semgrepBin') as string) || process.env.ORYON_SEMGREP_BIN || ''
         });
         results.push(...r);
         vscode.window.setStatusBarMessage(
@@ -127,6 +127,22 @@ export async function activate(context: vscode.ExtensionContext) {
       const findings: Finding[] = results.map(fromSemgrep);
       publishFindings(findings);
 
+      const counts = { total: findings.length, high: 0, medium: 0, low: 0 };
+      for (const f of findings) {
+        const sev = String((f as any).severity || '').toLowerCase();
+        if (sev === 'critical' || sev === 'high') counts.high++;
+        else if (sev === 'medium') counts.medium++;
+        else counts.low++;
+      }
+      resultsProvider.postSummary({
+        total: counts.total,
+        high: counts.high,
+        medium: counts.medium,
+        low: counts.low,
+        message: `Último análisis: ${new Date().toLocaleTimeString()}`
+      });
+
+      // Subida (si hay token)
       const access = await auth.getAccessToken();
       if (!access) {
         const dbg = await auth.debugTokens();
@@ -139,8 +155,8 @@ export async function activate(context: vscode.ExtensionContext) {
       let userRef: string | number = 'user_unknown';
       try {
         const me = await auth.whoami();
-        org = me?.org ?? org;
-        userRef = (me?.sub as any) ?? userRef;
+        org = (me as any)?.org ?? org;
+        userRef = ((me as any)?.sub as any) ?? userRef;
       } catch (e: any) {
         out.appendLine('whoami durante upload falló: ' + (e?.message || e));
       }
@@ -165,10 +181,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
       try {
         const { id: scanId } = await uploader.createOrUpdateScan(scanPayload, idem);
+        if (!scanId) throw new Error('scanId vacío tras crear scan');
         await uploader.uploadFindings(scanId, findings);
         vscode.window.showInformationMessage(`Oryon: Scan subido (${findings.length} findings).`);
       } catch (e: any) {
-        out.appendLine('Upload FAILED: ' + (e?.message || e));
+        out.appendLine('Upload FAILED: ' + (e?.responseBody || e?.message || e));
         vscode.window.showErrorMessage(`Error subiendo a la plataforma: ${e?.message || e}`);
       }
     }
@@ -190,10 +207,15 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand('sec.scan', requireAuth(scanWorkspaceAndUpload)),
       vscode.commands.registerCommand('sec.exportReport', requireAuth(() => vscode.window.showInformationMessage('Export report TODO'))),
       vscode.commands.registerCommand('sec.toggleSeverity', requireAuth(() => vscode.window.showInformationMessage('Toggle severity TODO'))),
-      vscode.commands.registerCommand('sec.setup', async () => { await runSetupWizard(context, auth, out); })
+
+      vscode.commands.registerCommand('sec.setup', async () => { await runSetupWizard(context, auth, out); }),
+
+      vscode.commands.registerCommand('oryon.clearDiagnostics', () => {
+        clearDiagnostics();
+        vscode.window.showInformationMessage('Oryon: diagnostics limpiados.');
+      })
     );
 
-    // Live scanner (siempre activo)
     const live = new LiveScanner({
       configs: (cfg.get('semgrep.configs') as string[]) ?? ['p/owasp-top-ten', 'p/secrets'],
       timeoutSec: (cfg.get('timeoutSec') as number) ?? 60,

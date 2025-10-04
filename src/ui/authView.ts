@@ -37,8 +37,12 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
           }
         };
         webview.postMessage({ type: 'state', payload });
+        if (loggedIn) {
+          // abre Results en cuanto te logueas
+          vscode.commands.executeCommand('workbench.view.extension.oryon');
+          vscode.commands.executeCommand('workbench.view.extension.oryon.resultsView');
+        }
       } catch (e: any) {
-        console.error('[oryon] whoami/state failed:', e?.message || e);
         await vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', false);
         webview.postMessage({ type: 'state', payload: { me: {}, cfg: {} } });
       }
@@ -59,14 +63,8 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
             await pushState();
             break;
           }
-          case 'whoami': {
-            await pushState();
-            break;
-          }
-          case 'openSettings': {
-            await vscode.commands.executeCommand('workbench.action.openSettings', 'oryon');
-            break;
-          }
+          case 'whoami': await pushState(); break;
+          case 'openSettings': await vscode.commands.executeCommand('workbench.action.openSettings', 'oryon'); break;
           case 'saveQuickConfig': {
             const cfg = vscode.workspace.getConfiguration('oryon');
             const w = vscode.ConfigurationTarget.Workspace;
@@ -85,10 +83,7 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
             await pushState();
             break;
           }
-          case 'scanWorkspace': {
-            await vscode.commands.executeCommand('sec.scan');
-            break;
-          }
+          case 'scanWorkspace': await vscode.commands.executeCommand('sec.scan'); break;
         }
       } catch (e: any) {
         webview.postMessage({ type: 'error', payload: e?.message || String(e) });
@@ -99,13 +94,13 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
     pushState();
   }
 
-  private renderHtml(): string {
+    private renderHtml(): string {
     const nonce = String(Math.random()).slice(2);
     const csp = [
       "default-src 'none'",
       "img-src https: data:",
       "style-src 'unsafe-inline'",
-      `script-src 'nonce-${nonce}'`
+      `script-src 'nonce-${nonce}'`,
     ].join(';');
 
     return `<!doctype html>
@@ -122,7 +117,7 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
     input, select, textarea { width: 100%; padding: 6px; }
     button { padding: 6px 10px; }
     .muted { opacity: .8; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono','Courier New', monospace; }
     .box { border: 1px solid var(--vscode-editorWidget-border); padding: 10px; border-radius: 6px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
     .grid .cell { display: flex; flex-direction: column; gap: 6px; }
@@ -134,7 +129,7 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
-  <h3>Oryon — Sesión</h3>
+  <h3>Oryon — Login / Setup</h3>
 
   <div class="box" id="statusBox">
     <div><strong>Usuario:</strong> <span id="user">desconocido</span></div>
@@ -321,4 +316,5 @@ export class AuthViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+
 }

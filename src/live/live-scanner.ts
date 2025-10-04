@@ -2,61 +2,45 @@
 import * as vscode from 'vscode';
 import { runSemgrepOnFiles } from '../scanners/semgrep';
 import { fromSemgrep, Finding } from '../normalize';
-import { publishFindings, clearDiagnostics } from '../diagnostics';
+import { publishFindings } from '../diagnostics';
 
-export interface LiveScannerOptions {
-  configs: string[];
-  timeoutSec: number;
-  onDebug?: (msg: string) => void;
-}
+type Opts = { configs: string[]; timeoutSec: number; onDebug?: (m: string) => void };
 
 export class LiveScanner {
-  private timer: NodeJS.Timeout | undefined;
+  private last: NodeJS.Timeout | null = null;
+  private cache: Map<string, Finding[]> = new Map();
 
-  constructor(private opts: LiveScannerOptions) {}
+  constructor(private opt: Opts) {}
 
-  bind(context: vscode.ExtensionContext) {
-    context.subscriptions.push(
-      vscode.workspace.onDidChangeTextDocument((e) => {
-        if (e.document.uri.scheme !== 'file') return;
-        this.debounceScan(e.document);
-      }),
-      vscode.workspace.onDidSaveTextDocument((doc) => {
-        if (doc.uri.scheme !== 'file') return;
-        this.debounceScan(doc, 300);
-      }),
-      vscode.workspace.onDidCloseTextDocument((doc) => {
-        if (doc.uri.scheme !== 'file') return;
-        clearDiagnostics(doc.uri.fsPath);
+  bind(ctx: vscode.ExtensionContext) {
+    ctx.subscriptions.push(
+      vscode.workspace.onDidSaveTextDocument(doc => {
+        const fsPath = doc.uri.fsPath;
+        this.debounce(async () => {
+          try {
+            const res = await runSemgrepOnFiles([fsPath], this.opt.configs, {
+              timeoutSec: this.opt.timeoutSec,
+              onDebug: this.opt.onDebug
+            });
+            const fnds = (res || []).map(fromSemgrep);
+            this.cache.set(fsPath, fnds);
+            this.pushAll();
+          } catch (e: any) {
+            // ignora
+          }
+        }, 250);
       })
     );
   }
 
-  private debounceScan(doc: vscode.TextDocument, delay = 800) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.scanDocument(doc), delay);
+  private pushAll() {
+    const all: Finding[] = [];
+    for (const arr of this.cache.values()) all.push(...arr);
+    publishFindings(all);
   }
 
-  private async scanDocument(doc: vscode.TextDocument) {
-    const path = doc.uri.fsPath;
-    const ext = path.split('.').pop() || '';
-    const allowed = ['rb','py','js','jsx','ts','tsx'];
-    if (!allowed.includes(ext)) return;
-
-    try {
-      const results = await runSemgrepOnFiles([path], this.opts.configs, {
-        timeoutSec: this.opts.timeoutSec,
-        onDebug: this.opts.onDebug,
-      });
-
-      const findings: Finding[] = results
-        .map(fromSemgrep)
-        .filter(f => f.file === path);
-
-      clearDiagnostics(path);
-      publishFindings(findings);
-    } catch (e: any) {
-      this.opts.onDebug?.(`[live] scan error: ${e?.message || e}`);
-    }
+  private debounce(fn: () => void, ms: number) {
+    if (this.last) clearTimeout(this.last);
+    this.last = setTimeout(fn, ms);
   }
 }

@@ -1,47 +1,102 @@
 // src/scanners/semgrep.ts
-import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-const execFileAsync = promisify(execFile);
+import * as util from 'node:util';
 
-export type RunOpts = {
-  timeoutSec?: number;
-  signal?: AbortSignal;
-  onDebug?: (m: string) => void;
+const execFileAsync = util.promisify(execFile);
+
+export type SemgrepFindingRaw = {
+  check_id?: string;
+  extra?: {
+    severity?: string;
+    message?: string;
+    metadata?: Record<string, any>;
+  };
+  path?: string;
+  start?: { line: number; col: number; offset?: number };
+  end?:   { line: number; col: number; offset?: number };
 };
 
-async function resolveSemgrepBin(): Promise<string> {
-  // 1) env override
-  if (process.env.ORYON_SEMGREP_BIN) return process.env.ORYON_SEMGREP_BIN;
-  // 2) setting
-  const cfg = vscode.workspace.getConfiguration('oryon');
-  const s = cfg.get<string>('semgrepBin', '');
-  if (s && s.trim()) return s.trim();
-  // 3) fallback: PATH
-  return 'semgrep';
+export type SemgrepJson = {
+  results?: SemgrepFindingRaw[];
+};
+
+export type SemgrepOptions = {
+  timeoutSec: number;
+  semgrepBin?: string;           // opcional, si viene se usa tal cual
+  onDebug?: (msg: string) => void;
+};
+
+function buildArgs(files: string[], configs: string[], timeoutSec: number) {
+  const base = [
+    '--json',
+    '--quiet',
+    `--timeout=${timeoutSec}`,
+    '--metrics=off',
+  ];
+
+  const cfgs = configs.flatMap(c => ['--config', c]);
+
+  // semgrep permite pasar los paths al final
+  return [...base, ...cfgs, ...files];
 }
 
+async function detectSemgrepBin(explicit?: string): Promise<{cmd: string; argsPrefix: string[]}> {
+  if (explicit && explicit.trim()) {
+    return { cmd: explicit.trim(), argsPrefix: [] };
+  }
+  // intentamos usar semgrep local; si no, npx
+  try {
+    await execFileAsync('semgrep', ['--version'], { timeout: 3000 });
+    return { cmd: 'semgrep', argsPrefix: [] };
+  } catch {
+    return { cmd: 'npx', argsPrefix: ['-y', 'semgrep'] };
+  }
+}
+
+async function runOnce(cmd: string, args: string[], opt: SemgrepOptions): Promise<SemgrepJson> {
+  opt.onDebug?.(`[semgrep] ${cmd} ${args.join(' ')}`);
+  const { stdout } = await execFileAsync(cmd, args, {
+    timeout: opt.timeoutSec * 1000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  let json: SemgrepJson;
+  try {
+    json = JSON.parse(stdout || '{}');
+  } catch {
+    json = { results: [] };
+  }
+  return json;
+}
+
+/**
+ * Ejecuta semgrep sobre un conjunto de archivos.
+ * - Si falla por reglas/packs, reintenta con un set mínimo (owasp-top-ten, secrets, ruby, javascript).
+ */
 export async function runSemgrepOnFiles(
   files: string[],
   configs: string[],
-  opts: RunOpts = {}
-): Promise<any[]> {
-  if (!files.length) return [];
+  opt: SemgrepOptions
+): Promise<SemgrepFindingRaw[]> {
+  const bin = await detectSemgrepBin(opt.semgrepBin);
+  const args = [...bin.argsPrefix, ...buildArgs(files, configs, opt.timeoutSec)];
 
-  const bin = await resolveSemgrepBin();
-  const timeoutSec = Math.max(10, opts.timeoutSec ?? 60);
-
-  const args: string[] = ['--json', '--quiet', `--timeout=${timeoutSec}`, '--metrics=off'];
-  for (const c of configs) args.push('--config', c);
-  args.push(...files);
-
-  const env = { ...process.env, PYTHONWARNINGS: 'ignore::UserWarning' };
-  opts.onDebug?.(`[semgrep] exec: ${bin} ${args.join(' ')}`);
-
-  const { stdout } = await execFileAsync(bin, args, { signal: opts.signal, env });
-  let parsed: any;
-  try { parsed = JSON.parse(stdout || '{}'); } catch { parsed = {}; }
-  const results: any[] = Array.isArray(parsed.results) ? parsed.results : [];
-  opts.onDebug?.(`[semgrep] results: ${results.length}`);
-  return results;
+  try {
+    const json = await runOnce(bin.cmd, args, opt);
+    return Array.isArray(json.results) ? json.results : [];
+  } catch (e: any) {
+    // retry con set mínimo
+    if (configs.length > 6) {
+      const min = ['p/owasp-top-ten', 'p/secrets', 'p/ruby', 'p/javascript'];
+      try {
+        opt.onDebug?.('[semgrep] retry with reduced ruleset');
+        const args2 = [...bin.argsPrefix, ...buildArgs(files, min, opt.timeoutSec)];
+        const json2 = await runOnce(bin.cmd, args2, opt);
+        return Array.isArray(json2.results) ? json2.results : [];
+      } catch (e2: any) {
+        opt.onDebug?.('[semgrep] retry failed: ' + (e2?.message || e2));
+        throw e2;
+      }
+    }
+    throw e;
+  }
 }

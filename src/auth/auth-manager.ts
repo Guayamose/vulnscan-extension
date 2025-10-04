@@ -1,131 +1,84 @@
 // src/auth/auth-manager.ts
 import * as vscode from 'vscode';
-import { OryonApi, Tokens, WhoAmI } from './api';
+import { OryonApi } from './api';
 
-const ACCESS_KEY  = 'oryon/auth/access';
-const REFRESH_KEY = 'oryon/auth/refresh';
-const EXP_KEY     = 'oryon/auth/expiresAt';
-export const LOGIN_CONTEXT_KEY = 'oryon:isLoggedIn';
+type Tokens = { access?: string; refresh?: string; expires_at?: number };
+
+const K = {
+  ACCESS: 'oryon/access',
+  REFRESH: 'oryon/refresh',
+  EXPIRES: 'oryon/expires'
+};
 
 export class AuthManager {
   private api: OryonApi;
-
   constructor(private ctx: vscode.ExtensionContext, baseUrl: string) {
     this.api = new OryonApi(baseUrl);
   }
 
-  setBaseUrl(baseUrl: string) { this.api = new OryonApi(baseUrl); }
-  get apiClient() { return this.api; }
-
   async init() {
-    const ok = !!(await this.getAccessTokenSafe());
-    await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, ok);
+    const access = await this.getAccessToken();
+    const ok = !!access;
+    await vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', ok);
   }
 
-  async isLoggedIn(): Promise<boolean> {
-    return !!(await this.ctx.secrets.get(ACCESS_KEY));
+  async isLoggedIn() {
+    const a = await this.getAccessToken();
+    return !!a;
   }
 
   async login(username: string, password: string) {
-    const t = await this.api.passwordLogin(username, password);
-    await this.saveTokens(t);
-    await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, true);
+    const res = await this.api.passwordLogin(username, password);
+    const now = Math.floor(Date.now()/1000);
+    await this.ctx.secrets.store(K.ACCESS, res.access || '');
+    await this.ctx.secrets.store(K.REFRESH, res.refresh || '');
+    await this.ctx.secrets.store(K.EXPIRES, String(now + (res.expires_in || 900) - 30));
+    await vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', true);
   }
 
   async logout() {
-    const refresh = await this.ctx.secrets.get(REFRESH_KEY);
-    if (refresh) { try { await this.api.revoke(refresh); } catch { /* noop */ } }
-    await this.clear();
-    await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, false);
-  }
-
-  async whoami(): Promise<WhoAmI> {
-    const access = await this.getAccessTokenSafe();
-    if (!access) {
-      await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, false);
-      return {};
-    }
-    const me = await this.api.whoami(access);
-
-    // Refleja claves para máxima compatibilidad en el resto de la extensión
-    const both: WhoAmI = {
-      ...me,
-      sub: (me.sub ?? me.user_id) ?? null,
-      user_id: (me.user_id ?? me.sub) ?? null,
-      role: me.role ?? me.scope ?? null,
-    };
-
-    const ok = !!(both.sub != null);
-    await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, ok);
-    return both;
+    try {
+      const r = await this.ctx.secrets.get(K.REFRESH);
+      if (r) await this.api.revoke(r);
+    } catch {}
+    await this.ctx.secrets.delete(K.ACCESS);
+    await this.ctx.secrets.delete(K.REFRESH);
+    await this.ctx.secrets.delete(K.EXPIRES);
+    await vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', false);
   }
 
   async getAccessToken(): Promise<string | null> {
-    const access = await this.ctx.secrets.get(ACCESS_KEY);
-    const refresh = await this.ctx.secrets.get(REFRESH_KEY);
-    const expStr  = await this.ctx.secrets.get(EXP_KEY);
-    if (!access || !refresh || !expStr) return null;
-
-    const exp = Number(expStr);
-    if (Number.isNaN(exp)) { await this.clear(); return null; }
-
+    const access = await this.ctx.secrets.get(K.ACCESS);
+    const exp = Number(await this.ctx.secrets.get(K.EXPIRES) || '0');
     const now = Math.floor(Date.now()/1000);
-    if (now >= (exp - 30)) {
-      try {
-        const t = await this.api.refresh(refresh);
-        await this.saveTokens(t);
-        return t.access;
-      } catch {
-        await this.clear();
-        return null;
-      }
-    }
-    return access;
-  }
-
-  private async getAccessTokenSafe(): Promise<string | null> {
-    const access = await this.ctx.secrets.get(ACCESS_KEY);
-    if (!access) return null;
-    const expStr = await this.ctx.secrets.get(EXP_KEY);
-    const refresh = await this.ctx.secrets.get(REFRESH_KEY);
-    const exp = expStr ? Number(expStr) : NaN;
-    const now = Math.floor(Date.now()/1000);
-    if (!Number.isNaN(exp) && now < (exp - 30)) return access;
-    if (!refresh) return access;
+    if (access && now < exp) return access;
+    // refresh
+    const refresh = await this.ctx.secrets.get(K.REFRESH);
+    if (!refresh) return null;
     try {
-      const t = await this.api.refresh(refresh);
-      await this.saveTokens(t);
-      await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, true);
-      return t.access;
+      const res = await this.api.refresh(refresh);
+      const nnow = Math.floor(Date.now()/1000);
+      await this.ctx.secrets.store(K.ACCESS, res.access || '');
+      await this.ctx.secrets.store(K.REFRESH, res.refresh || refresh);
+      await this.ctx.secrets.store(K.EXPIRES, String(nnow + (res.expires_in || 900) - 30));
+      return res.access || null;
     } catch {
-      await this.clear();
-      await vscode.commands.executeCommand('setContext', LOGIN_CONTEXT_KEY, false);
+      await this.logout();
       return null;
     }
   }
 
-  private async saveTokens(t: Tokens) {
-    const expiresAt = Math.floor(Date.now()/1000) + (t.expires_in ?? 900);
-    await this.ctx.secrets.store(ACCESS_KEY, t.access);
-    await this.ctx.secrets.store(REFRESH_KEY, t.refresh);
-    await this.ctx.secrets.store(EXP_KEY, String(expiresAt));
-  }
-
-  private async clear() {
-    await this.ctx.secrets.delete(ACCESS_KEY);
-    await this.ctx.secrets.delete(REFRESH_KEY);
-    await this.ctx.secrets.delete(EXP_KEY);
+  async whoami() {
+    const a = await this.getAccessToken();
+    if (!a) return null;
+    return this.api.whoami(a);
   }
 
   async debugTokens() {
-    const access  = !!(await this.ctx.secrets.get(ACCESS_KEY));
-    const refresh = !!(await this.ctx.secrets.get(REFRESH_KEY));
-    const expStr  = await this.ctx.secrets.get(EXP_KEY);
-    const exp = expStr ? Number(expStr) : null;
-    const now = Math.floor(Date.now()/1000);
     return {
-      hasAccess: access, hasRefresh: refresh, expiresAt: exp, now,
-      expiredOrNear: exp != null ? now >= (exp - 30) : true
+      has_access: !!(await this.ctx.secrets.get(K.ACCESS)),
+      has_refresh: !!(await this.ctx.secrets.get(K.REFRESH)),
+      exp: await this.ctx.secrets.get(K.EXPIRES)
     };
   }
 }

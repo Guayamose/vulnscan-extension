@@ -1,76 +1,98 @@
 {
-  "name": "vulnscan-ext",
-  "displayName": "VulnScan_ext",
+  "name": "oryon-ext",
+  "displayName": "oryon_ext",
   "description": "Security scanner + AI enrichment",
   "version": "0.0.1",
   "engines": { "vscode": "^1.104.0" },
   "categories": ["Other"],
   "main": "./dist/extension.js",
-
   "activationEvents": [
     "onStartupFinished",
     "onView:secFindings",
+    "onView:oryon.authView",
+    "onView:oryon.resultsView",
     "onCommand:sec.setup",
     "onCommand:sec.scan",
     "onCommand:sec.exportReport",
-    "onCommand:sec.toggleSeverity"
+    "onCommand:sec.toggleSeverity",
+    "onCommand:oryon.login",
+    "onCommand:oryon.logout",
+    "onCommand:oryon.whoami"
   ],
-
   "contributes": {
     "commands": [
       { "command": "sec.scan", "title": "Security: Scan Workspace" },
-      { "command": "sec.setup", "title": "VulnScan: Setup Wizard" },
+      { "command": "sec.setup", "title": "oryon: Setup Wizard" },
       { "command": "sec.exportReport", "title": "Security: Export Report (Markdown)" },
-      { "command": "sec.toggleSeverity", "title": "VulnScan: Set Minimum Severity" }
+      { "command": "sec.toggleSeverity", "title": "oryon: Set Minimum Severity" },
+      { "command": "oryon.login", "title": "oryon: Login" },
+      { "command": "oryon.logout", "title": "oryon: Logout" },
+      { "command": "oryon.whoami", "title": "oryon: Who am I" }
     ],
     "keybindings": [
       {
         "command": "sec.scan",
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s",
-        "when": "editorTextFocus"
+        "when": "editorTextFocus && oryon:isLoggedIn"
       }
     ],
     "menus": {
       "commandPalette": [
-        { "command": "sec.scan", "when": "true" },
+        { "command": "sec.scan", "when": "oryon:isLoggedIn" },
         { "command": "sec.setup", "when": "true" },
-        { "command": "sec.exportReport", "when": "true" },
-        { "command": "sec.toggleSeverity", "when": "true" }
+        { "command": "sec.exportReport", "when": "oryon:isLoggedIn" },
+        { "command": "sec.toggleSeverity", "when": "oryon:isLoggedIn" },
+        { "command": "oryon.login", "when": "!oryon:isLoggedIn" },
+        { "command": "oryon.logout", "when": "oryon:isLoggedIn" },
+        { "command": "oryon.whoami", "when": "oryon:isLoggedIn" }
       ],
       "explorer/context": [
-        { "command": "sec.scan", "group": "navigation@50" },
-        { "command": "sec.exportReport", "group": "navigation@51" },
-        { "command": "sec.setup", "group": "navigation@52" }
+        { "command": "sec.scan", "when": "oryon:isLoggedIn", "group": "navigation@50" },
+        { "command": "sec.exportReport", "when": "oryon:isLoggedIn", "group": "navigation@51" },
+        { "command": "sec.setup", "when": "true", "group": "navigation@52" }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "oryon",
+          "title": "Oryon",
+          "icon": "resources/oryon.svg"
+        }
       ]
     },
     "views": {
+      "oryon": [
+        { "id": "oryon.authView", "name": "Login / Setup", "type": "webview" },
+        { "id": "oryon.resultsView", "name": "Results", "type": "webview", "when": "oryon:isLoggedIn" }
+      ],
       "explorer": [
-        { "id": "secFindings", "name": "Security Findings" }
+        { "id": "secFindings", "name": "Security Findings", "when": "oryon:isLoggedIn" }
       ]
     },
     "viewsWelcome": [
       {
         "view": "secFindings",
-        "contents": "Bienvenido a **VulnScan**.\n\n- $(play) [Abrir asistente de configuración](command:sec.setup)\n- $(shield) [Escanear ahora](command:sec.scan)\n\nTambién disponible con `Ctrl/⌘+Alt+S`."
+        "contents": "Bienvenido a **oryon**.\\n\\n- $(play) [Abrir asistente de configuración](command:sec.setup)\\n- $(shield) [Escanear ahora](command:sec.scan)\\n\\nTambién disponible con `Ctrl/⌘+Alt+S`."
       }
     ],
     "gettingStarted": [
       {
-        "category": "vulnscan.gettingStarted",
-        "title": "VulnScan — Primeros pasos",
+        "category": "oryon.gettingStarted",
+        "title": "oryon — Primeros pasos",
         "description": "Configura Semgrep y tu API key en un minuto.",
         "icon": "book",
         "steps": [
           {
-            "id": "vulnscan.step.setup",
+            "id": "oryon.step.setup",
             "title": "Abrir el Setup Wizard",
             "description": "Revisa Semgrep y guarda tu OPENAI_API_KEY en VS Code Secrets.",
             "completionEvents": ["onCommand:sec.setup"],
-            "media": { "markdown": "Pulsa para abrir: [VulnScan: Setup Wizard](command:sec.setup)" }
+            "media": { "markdown": "Pulsa para abrir: [oryon: Setup Wizard](command:sec.setup)" }
           },
           {
-            "id": "vulnscan.step.scan",
+            "id": "oryon.step.scan",
             "title": "Lanzar un escaneo",
             "description": "Ejecuta un escaneo del workspace y abre el reporte.",
             "completionEvents": ["onCommand:sec.scan"],
@@ -80,66 +102,130 @@
       }
     ],
     "configuration": {
-      "title": "VulnScan",
+      "title": "oryon",
       "properties": {
-        "vulnscan.targetDirectory": {
+        "oryon.backend.baseUrl": {
+          "type": "string",
+          "default": "https://vulnscan-mock-df9c85d690d0.herokuapp.com",
+          "markdownDescription": "Base URL del backend de Oryon/Vulnscan."
+        },
+        "oryon.targetDirectory": {
           "type": "string",
           "enum": ["auto", "app", "root"],
           "default": "auto",
           "description": "Qué carpeta escanear: 'auto' (usa app/ si existe), 'app' o 'root' (raíz del workspace)."
         },
-        "vulnscan.minSeverity": {
+        "oryon.minSeverity": {
           "type": "string",
           "enum": ["info", "low", "medium", "high", "critical"],
           "default": "low",
           "description": "Severidad mínima a mostrar (y enriquecer)."
         },
-        "vulnscan.semgrep.configs": {
+        "oryon.semgrep.configs": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["p/owasp-top-ten", "p/ruby"],
+          "default": [
+            "p/ci",
+            "p/security-audit",
+            "p/owasp-top-ten",
+            "p/secrets",
+            "p/javascript",
+            "p/typescript",
+            "p/react",
+            "p/vue",
+            "p/angular",
+            "p/nodejs",
+            "p/python",
+            "p/django",
+            "p/flask",
+            "p/java",
+            "p/spring",
+            "p/csharp",
+            "p/dotnet",
+            "p/go",
+            "p/ruby",
+            "p/rails",
+            "p/php",
+            "p/laravel",
+            "p/kotlin",
+            "p/scala",
+            "p/swift",
+            "p/rust",
+            "p/docker",
+            "p/kubernetes",
+            "p/terraform",
+            "p/cloud",
+            "p/github-actions"
+          ],
           "description": "Listado de configuraciones/reglas de Semgrep."
         },
-        "vulnscan.batchSize": {
+        "oryon.scan.maxFileSizeKb": {
+          "type": "number",
+          "default": 1024,
+          "minimum": 1,
+          "markdownDescription": "Tamaño máximo de archivo a escanear (KB). Archivos mayores se saltan."
+        },
+        "oryon.scan.excludeGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.git/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/.tox/**",
+            "**/coverage/**",
+            "**/.next/**",
+            "**/.cache/**"
+          ],
+          "markdownDescription": "Patrones glob a excluir del escaneo."
+        },
+        "oryon.batchSize": {
           "type": "number",
           "default": 60,
           "minimum": 10,
           "description": "Número de archivos por lote para mostrar progreso real."
         },
-        "vulnscan.timeoutSec": {
+        "oryon.timeoutSec": {
           "type": "number",
           "default": 60,
           "minimum": 10,
           "description": "Timeout por ejecución de Semgrep (segundos)."
         },
-        "vulnscan.allowedExtensions": {
+        "oryon.allowedExtensions": {
           "type": "array",
           "items": { "type": "string" },
           "default": [".rb", ".py", ".js", ".jsx", ".ts", ".tsx"],
           "description": "Extensiones de archivo a analizar."
         },
-        "vulnscan.enrich.concurrency": {
+        "oryon.enrich.concurrency": {
           "type": "number",
           "default": 3,
           "minimum": 1,
           "maximum": 8,
           "description": "Máximo de findings enriquecidos en paralelo."
         },
-        "vulnscan.autoScanOnSave": {
+        "oryon.autoScanOnSave": {
           "type": "boolean",
           "default": false,
           "description": "Si está activo, ejecuta un escaneo rápido al guardar archivos."
         },
-        "vulnscan.enrich.language": {
+        "oryon.enrich.language": {
           "type": "string",
           "enum": ["auto", "es", "en", "fr", "de", "it", "pt", "ja", "ko", "zh"],
           "default": "es",
           "description": "Idioma del análisis (salida de IA). 'auto' usa el locale de VS Code."
+        },
+        "oryon.semgrepBin": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Ruta al binario de Semgrep (opcional). Si se deja vacío, la extensión intenta autodetectarlo. También puedes usar la variable de entorno `ORYON_SEMGREP_BIN`."
         }
       }
     }
   },
-
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
@@ -154,22 +240,21 @@
     "lint": "eslint src",
     "test": "vscode-test"
   },
-
   "devDependencies": {
-    "@types/vscode": "^1.104.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
+    "@types/vscode": "^1.104.0",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
-    "eslint": "^9.34.0",
-    "esbuild": "^0.25.9",
-    "npm-run-all": "^4.1.5",
-    "typescript": "^5.9.2",
     "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.10",
+    "eslint": "^9.34.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3"
   },
-
   "dependencies": {
+    "axios": "^1.12.2",
     "dotenv": "^17.2.2",
     "openai": "^5.20.2"
   }

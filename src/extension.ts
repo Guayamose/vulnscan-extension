@@ -1,353 +1,211 @@
+// src/extension.ts
 import * as vscode from 'vscode';
-import * as fs from 'node:fs';
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
-import dotenv from 'dotenv';
+import { runSemgrepOnFiles } from './scanners/semgrep';
+import { fromSemgrep, Finding } from './normalize';
+import { publishFindings, clearDiagnostics } from './diagnostics';
+import { AuthManager } from './auth/auth-manager';
+import { OryonApi } from './auth/api';
+import { Uploader } from './ingest/uploader';
+import { LiveScanner } from './live/live-scanner';
+import { runSetupWizard } from './setup';
+import { AuthViewProvider } from './ui/authView';
+import { ResultsViewProvider } from './ui/resultsView';
 
-import { runSemgrepOnFiles } from './scanners/semgrep.js';
-import { fromSemgrep, Finding } from './normalize.js';
-import { getSnippet } from './snippet.js';
-import { publishFindings, clearDiagnostics } from './diagnostics.js';
-import { enrichFinding } from './openai/enrich.js';
-import { openSecurityReport, UIItem, renderMarkdown } from './report.js';
-import { openSetupWizard } from './setup.js';
-
-const TOKEN_KEY = 'vulnscan/apiKey';
-const IGNORED_KEY = 'vulnscan/ignored';
-const SEV_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 } as const;
-
-let lastReportItems: UIItem[] = [];
-let statusScan: vscode.StatusBarItem;
-let statusSev: vscode.StatusBarItem;
-
-export async function activate(ctx: vscode.ExtensionContext) {
-  console.log('[vulnscan] activated');
+export async function activate(context: vscode.ExtensionContext) {
+  const out = vscode.window.createOutputChannel('Oryon');
+  context.subscriptions.push(out);
+  out.appendLine('[oryon] activate()');
 
   try {
-    const envPath = path.join(ctx.extensionPath, '.env');
-    if (fs.existsSync(envPath)) {dotenv.config({ path: envPath });}
-  } catch {}
-  const secretKey = await ctx.secrets.get(TOKEN_KEY);
-  if (secretKey && !process.env.OPENAI_API_KEY) {process.env.OPENAI_API_KEY = secretKey;}
+    const cfg = vscode.workspace.getConfiguration('oryon');
+    const baseUrl =
+      (cfg.get('backend.baseUrl') as string) ??
+      'https://vulnscan-mock-df9c85d690d0.herokuapp.com';
 
-  statusScan = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusScan.text = '$(shield) Scan';
-  statusScan.tooltip = 'Security: Scan Workspace';
-  statusScan.command = 'sec.scan';
-  statusScan.show();
-  ctx.subscriptions.push(statusScan);
+    // ⚠️ IMPORTANTE: crear AuthManager y REGISTRAR VISTAS ANTES DE CUALQUIER await
+    const auth = new AuthManager(context, baseUrl);
 
-  statusSev = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-  statusSev.command = 'sec.toggleSeverity';
-  updateSevStatus();
-  statusSev.show();
-  ctx.subscriptions.push(statusSev);
+    // 1) Registrar vistas inmediatamente (sin esperar a init)
+    const authProvider = new AuthViewProvider(context, auth);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(AuthViewProvider.viewId, authProvider)
+    );
 
-  ctx.subscriptions.push(vscode.commands.registerCommand('sec.setup', () => openSetupWizard(ctx)));
-  ctx.subscriptions.push(vscode.commands.registerCommand('sec.toggleSeverity', setMinSeverity));
-  ctx.subscriptions.push(vscode.commands.registerCommand('sec.exportReport', exportReport));
-  ctx.subscriptions.push(vscode.commands.registerCommand('sec.scan', () => scanWorkspace(ctx)));
+    const resultsProvider = new ResultsViewProvider(context);
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(ResultsViewProvider.viewId, resultsProvider)
+    );
+    out.appendLine('[oryon] webview providers registered');
 
-  const dispSave = vscode.workspace.onDidSaveTextDocument(async () => {
-    const cfg = vscode.workspace.getConfiguration('vulnscan');
-    if (cfg.get<boolean>('autoScanOnSave', false)) {
-      await scanWorkspace(ctx, { silentIfRunning: true });
-    }
-  });
-  ctx.subscriptions.push(dispSave);
+    // 2) Lanzar init en background (no bloquear el registro de vistas)
+    auth.init().catch((e: any) => {
+      out.appendLine('[oryon] auth.init() failed: ' + (e?.message || e));
+      vscode.commands.executeCommand('setContext', 'oryon:isLoggedIn', false);
+    });
 
-  void maybeShowSetup();
-}
-
-async function maybeShowSetup() {
-  const hasKey = !!process.env.OPENAI_API_KEY;
-  if (!hasKey) {setTimeout(() => vscode.commands.executeCommand('sec.setup'), 500);}
-}
-
-async function setMinSeverity() {
-  const cfg = vscode.workspace.getConfiguration('vulnscan');
-  const current = cfg.get<'info'|'low'|'medium'|'high'|'critical'>('minSeverity', 'low');
-  const pick = await vscode.window.showQuickPick(['info','low','medium','high','critical'], {
-    title: 'Minimum severity',
-    placeHolder: current
-  });
-  if (!pick) {return;}
-  await cfg.update('minSeverity', pick, vscode.ConfigurationTarget.Workspace);
-  updateSevStatus();
-}
-
-function updateSevStatus() {
-  const cfg = vscode.workspace.getConfiguration('vulnscan');
-  const sev = cfg.get<string>('minSeverity', 'low');
-  const mapIcon: Record<string,string> = { critical: '$(flame)', high: '$(circle-filled)', medium: '$(warning)', low: '$(info)', info: '$(circle-outline)' };
-  statusSev.text = `${mapIcon[sev] || '$(info)'} ${sev}`;
-  statusSev.tooltip = 'VulnScan: Set Minimum Severity';
-}
-
-async function exportReport() {
-  if (!lastReportItems.length) {
-    return vscode.window.showWarningMessage('No hay un reporte reciente para exportar. Ejecuta "Security: Scan Workspace" primero.');
-  }
-  const uri = await vscode.window.showSaveDialog({ filters: { Markdown: ['md'] }, saveLabel: 'Export' });
-  if (!uri) {return;}
-  const md = renderMarkdown(lastReportItems);
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(md, 'utf8'));
-  vscode.window.showInformationMessage(`Reporte exportado a ${uri.fsPath}`);
-}
-
-type Sev = 'info'|'low'|'medium'|'high'|'critical';
-function normalizeSeverity(s: unknown): Sev {
-  const u = String(s ?? '').toUpperCase();
-  switch (u) {
-    case 'INFO': return 'info';
-    case 'WARNING': return 'medium'; // cámbialo a 'low' si lo prefieres
-    case 'ERROR': return 'high';
-    case 'LOW': return 'low';
-    case 'MEDIUM': return 'medium';
-    case 'HIGH': return 'high';
-    case 'CRITICAL': return 'critical';
-    default: return 'info';
-  }
-}
-
-async function scanWorkspace(ctx: vscode.ExtensionContext, _opts?: { silentIfRunning?: boolean }) {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) { return vscode.window.showErrorMessage('Open a folder first.'); }
-
-  const cfg = vscode.workspace.getConfiguration('vulnscan');
-  const targetDirectory = cfg.get<string>('targetDirectory', 'auto');
-  const minSeverity = cfg.get<'info'|'low'|'medium'|'high'|'critical'>('minSeverity', 'low');
-  const semgrepConfigs = cfg.get<string[]>('semgrep.configs', ['p/owasp-top-ten', 'p/ruby']);
-  const batchSize = Math.max(10, cfg.get<number>('batchSize', 60));
-  const timeoutSec = Math.max(10, cfg.get<number>('timeoutSec', 60));
-  const allowedExtensions = new Set(cfg.get<string[]>('allowedExtensions', [".rb", ".py", ".js", ".jsx", ".ts", ".tsx"]));
-  const enrichConcurrency = Math.min(8, Math.max(1, cfg.get<number>('enrich.concurrency', 3)));
-  const hasKey = !!process.env.OPENAI_API_KEY;
-
-  let analysisLanguage = cfg.get<string>('enrich.language', 'es')!;
-  if (analysisLanguage === 'auto') {analysisLanguage = (vscode.env.language || 'en').slice(0, 2);}
-
-  const appDir = path.join(workspaceRoot, 'app');
-  const out = vscode.window.createOutputChannel('Security');
-  out.clear();
-
-  let targetRoot: string;
-  if (targetDirectory === 'app') {
-    if (fs.existsSync(appDir)) {
-      targetRoot = appDir;
-    } else {
-      targetRoot = workspaceRoot;
-      vscode.window.showWarningMessage(`VulnScan: "app" no existe en ${workspaceRoot}. Escaneando raíz en su lugar.`);
-    }
-  } else if (targetDirectory === 'root') {
-    targetRoot = workspaceRoot;
-  } else {
-    targetRoot = fs.existsSync(appDir) ? appDir : workspaceRoot;
-  }
-
-  out.appendLine(`WorkspaceRoot: ${workspaceRoot}`);
-  out.appendLine(`TargetDirectory setting: ${targetDirectory}`);
-  out.appendLine(`Resolved targetRoot: ${targetRoot}`);
-  out.appendLine(`Configs: ${semgrepConfigs.join(', ')}`);
-  out.show(true);
-
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `VulnScan: scanning ${path.basename(targetRoot)}/ …`, cancellable: true },
-    async (progress, token) => {
-      try {
-        clearDiagnostics();
-        statusScan.text = '$(sync~spin) Scanning…';
-        progress.report({ message: 'indexing files…', increment: 0 });
-
-        const allFiles = await enumerateFiles(targetRoot, defaultExcludes(), token);
-        const targetFiles = allFiles.filter(f => allowedExtensions.has(path.extname(f)));
-        if (token.isCancellationRequested) {return;}
-
-        out.appendLine(`Enumerated files: ${allFiles.length}`);
-        out.appendLine(`Target files (by extension): ${targetFiles.length}`);
-
-        if (targetFiles.length === 0) {
-          vscode.window.showInformationMessage('VulnScan: no target files found.');
+    // Helper: requiere login
+    function requireAuth<T extends any[]>(fn: (...a: T) => any) {
+      return async (...a: T) => {
+        if (!(await auth.isLoggedIn())) {
+          vscode.window.showWarningMessage(
+            'Debes iniciar sesión en el panel Oryon (barra lateral) para usar estas funciones.'
+          );
+          await vscode.commands.executeCommand('workbench.view.extension.oryon');
           return;
         }
+        return fn(...a);
+      };
+    }
 
-        const findingsRaw: any[] = [];
-        const total = targetFiles.length;
-        let done = 0;
+    async function pickTargetFolder(): Promise<vscode.Uri | null> {
+      const mode = (cfg.get('targetDirectory') as 'auto' | 'app' | 'root') ?? 'auto';
+      const ws = vscode.workspace.workspaceFolders?.[0];
+      if (!ws) return null;
+      if (mode === 'root') return ws.uri;
+      if (mode === 'app') return vscode.Uri.joinPath(ws.uri, 'app');
+      const app = vscode.Uri.joinPath(ws.uri, 'app');
+      try { const stat = await vscode.workspace.fs.stat(app); if (stat) return app; } catch {}
+      return ws.uri;
+    }
 
-        for (let i = 0; i < total; i += batchSize) {
-          if (token.isCancellationRequested) {break;}
-          const batch = targetFiles.slice(i, i + batchSize);
-          const aborter = new AbortController();
-          token.onCancellationRequested(() => aborter.abort());
+    async function collectFiles(root: vscode.Uri): Promise<string[]> {
+      const allowed = new Set(((cfg.get('allowedExtensions') as string[]) ?? ['.rb','.py','.js','.jsx','.ts','.tsx']).map(s => s.toLowerCase()));
+      const excludes = (cfg.get('scan.excludeGlobs') as string[]) ?? [];
+      const maxKb = (cfg.get('scan.maxFileSizeKb') as number) ?? 1024;
 
-          progress.report({ message: `scanning ${done}/${total}…` });
+      const files = await vscode.workspace.findFiles(
+        new vscode.RelativePattern(root, '**/*'),
+        excludes.length ? `{${excludes.join(',')}}` : undefined
+      );
 
-          const raw = await runSemgrepOnFiles(batch, semgrepConfigs, {
-            timeoutSec,
-            signal: aborter.signal,
-            onDebug: (m) => out.appendLine(m)
-          });
-          findingsRaw.push(...raw);
-          done += batch.length;
+      const kept: string[] = [];
+      for (const u of files) {
+        const path = u.fsPath;
+        const dot = path.lastIndexOf('.');
+        const ext = (dot >= 0 ? path.slice(dot) : '').toLowerCase();
+        if (!allowed.has(ext)) continue;
+        try {
+          const stat = await vscode.workspace.fs.stat(u);
+          if (stat.size > maxKb * 1024) continue;
+          kept.push(path);
+        } catch {}
+      }
+      return kept;
+    }
 
-          out.appendLine(`Batch ${Math.floor(i / batchSize) + 1}: files=${batch.length}, semgrepResults=${raw.length}`);
-          const pct = Math.min(100, Math.round((done / total) * 100));
-          progress.report({ message: `scanned ${done}/${total} files`, increment: pct });
-        }
+    async function scanWorkspaceAndUpload() {
+      clearDiagnostics();
 
-        const mapped: Finding[] = findingsRaw.map(fromSemgrep).map(f => ({
-          ...f,
-          severity: normalizeSeverity((f as any).severity)
-        }));
+      const target = await pickTargetFolder();
+      if (!target) { vscode.window.showWarningMessage('No hay workspace abierto.'); return; }
 
-        // Aplicar ignore list
-        const ignored = new Set(ctx.workspaceState.get<string[]>(IGNORED_KEY, []));
-        const filteredForDiagnostics = mapped.filter(f => !ignored.has(f.fingerprint));
-        const hist: Record<string, number> = {};
-        for (const m of filteredForDiagnostics) {hist[m.severity] = (hist[m.severity] || 0) + 1;}
-        out.appendLine(`Severities after map (ignored filtered out): ${Object.entries(hist).map(([k,v]) => `${k}:${v}`).join(', ') || 'none'}`);
+      const files = await collectFiles(target);
+      if (!files.length) {
+        vscode.window.showInformationMessage('No hay archivos que coincidan con los filtros.');
+        return;
+      }
 
-        const findings = filteredForDiagnostics.filter(f => SEV_RANK[f.severity] >= SEV_RANK[minSeverity]);
-        for (const f of findings) { f.snippet = await getSnippet(f.file, f.range); }
-        publishFindings(findings);
+      const startedAt = new Date();
+      const configs = (cfg.get('semgrep.configs') as string[]) ?? ['p/owasp-top-ten', 'p/secrets'];
+      const timeoutSec = (cfg.get('timeoutSec') as number) ?? 60;
+      const batchSize  = (cfg.get('batchSize')  as number) ?? 60;
 
-        out.appendLine(`Findings (>= ${minSeverity}): ${findings.length}`);
+      const results: any[] = [];
+      for (let i = 0; i < files.length; i += batchSize) {
+        const chunk = files.slice(i, i + batchSize);
+        const r = await runSemgrepOnFiles(chunk, configs, {
+          timeoutSec,
+          onDebug: m => out.appendLine(m)
+        });
+        results.push(...r);
+        vscode.window.setStatusBarMessage(
+          `Oryon: Analizando… ${Math.min(i + batchSize, files.length)}/${files.length}`,
+          1500
+        );
+      }
 
-        const reportItems: UIItem[] = [];
-        if (hasKey && findings.length > 0 && !token.isCancellationRequested) {
-          await pLimit(enrichConcurrency, findings.map((f, idx) => async () => {
-            if (token.isCancellationRequested) {return;}
-            const loc = `${f.file}:${f.range.start.line + 1}`;
-            out.appendLine(`\n[${idx + 1}/${findings.length}] Enriching ${f.ruleId} @ ${loc} …`);
-            try {
-              const enriched = await enrichFinding(detectLang(f.file), f, analysisLanguage);
-              reportItems.push(toUIItem(f, {
-                explanation_md: enriched?.explanation_md ?? '',
-                unified_diff: enriched?.fix?.unified_diff ?? null,
-                calibrated: enriched?.severity_calibrated ?? null,
-                confidence: typeof enriched?.confidence === 'number' ? enriched.confidence : null,
-                references: Array.isArray(enriched?.references) ? enriched.references : [],
-                tests: Array.isArray(enriched?.tests_suggested) ? enriched.tests_suggested : [],
-                cwe: enriched?.cwe ?? f.cwe,
-                owasp: enriched?.owasp ?? f.owasp
-              }));
-            } catch (e: any) {
-              out.appendLine(`❌ AI enrich error: ${e?.message || e}`);
-              reportItems.push(toUIItem(f, {
-                explanation_md: '',
-                unified_diff: null,
-                calibrated: null,
-                confidence: null,
-                references: [],
-                tests: [],
-                cwe: f.cwe, owasp: f.owasp
-              }));
-            }
-          }));
-          out.show(true);
-        } else {
-          for (const f of findings) {reportItems.push(toUIItem(f, { explanation_md: '', unified_diff: null, calibrated: null, confidence: null, references: [], tests: [], cwe: f.cwe, owasp: f.owasp }));}
-        }
+      const findings: Finding[] = results.map(fromSemgrep);
+      publishFindings(findings);
 
-        if (!token.isCancellationRequested) {
-          lastReportItems = reportItems.sort((a, b) =>
-            a.relFile.localeCompare(b.relFile) || SEV_RANK[b.severity] - SEV_RANK[a.severity]
-          );
-          openSecurityReport(ctx, workspaceRoot, lastReportItems, {
-            targetRoot,
-            configs: semgrepConfigs,
-            timestamp: new Date().toISOString()
-          });
-          vscode.window.showInformationMessage(`VulnScan: done (${lastReportItems.length} findings >= ${minSeverity}).`);
-        } else {
-          vscode.window.showWarningMessage('VulnScan: cancelled.');
-        }
+      const access = await auth.getAccessToken();
+      if (!access) {
+        const dbg = await auth.debugTokens();
+        out.appendLine('No access token; estado: ' + JSON.stringify(dbg));
+        vscode.window.showWarningMessage('Resultados listos. Inicia sesión para subirlos.');
+        return;
+      }
+
+      let org = 'org_unknown';
+      let userRef: string | number = 'user_unknown';
+      try {
+        const me = await auth.whoami();
+        org = me?.org ?? org;
+        userRef = (me?.sub as any) ?? userRef;
       } catch (e: any) {
-        vscode.window.showErrorMessage(`Scan failed: ${e?.message || e}`);
-      } finally {
-        statusScan.text = '$(shield) Scan';
+        out.appendLine('whoami durante upload falló: ' + (e?.message || e));
+      }
+
+      const api = new OryonApi(baseUrl);
+      const uploader = new Uploader(api, access);
+      const finishedAt = new Date();
+      const idem = OryonApi.newIdemKey();
+
+      const scanPayload = {
+        org,
+        user_ref: userRef,
+        project_slug: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace',
+        scan_type: 'workspace' as const,
+        started_at: startedAt.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        finished_at: finishedAt.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        findings_ingested: findings.length,
+        deduped: 0,
+        status: 'completed' as const,
+        idempotency_key: idem
+      };
+
+      try {
+        const { id: scanId } = await uploader.createOrUpdateScan(scanPayload, idem);
+        await uploader.uploadFindings(scanId, findings);
+        vscode.window.showInformationMessage(`Oryon: Scan subido (${findings.length} findings).`);
+      } catch (e: any) {
+        out.appendLine('Upload FAILED: ' + (e?.message || e));
+        vscode.window.showErrorMessage(`Error subiendo a la plataforma: ${e?.message || e}`);
       }
     }
-  );
-}
 
-function detectLang(file: string) {
-  if (file.endsWith('.rb')) {return 'ruby';}
-  if (file.endsWith('.py')) {return 'python';}
-  if (file.endsWith('.ts') || file.endsWith('.tsx')) {return 'typescript';}
-  if (file.endsWith('.js') || file.endsWith('.jsx')) {return 'javascript';}
-  return 'unknown';
-}
+    // Comandos
+    context.subscriptions.push(
+      vscode.commands.registerCommand('oryon.login', async () => {
+        const username = await vscode.window.showInputBox({ prompt: 'Email/username' }); if (!username) return;
+        const password = await vscode.window.showInputBox({ prompt: 'Password', password: true }); if (!password) return;
+        try { await auth.login(username, password); vscode.window.showInformationMessage('Sesión iniciada.'); }
+        catch (e: any) { vscode.window.showErrorMessage('Login failed: ' + (e?.message || e)); }
+      }),
+      vscode.commands.registerCommand('oryon.logout', async () => { await auth.logout(); vscode.window.showInformationMessage('Sesión cerrada.'); }),
+      vscode.commands.registerCommand('oryon.whoami', async () => {
+        const me = await auth.whoami();
+        vscode.window.showInformationMessage('Conectado como: ' + JSON.stringify(me));
+      }),
 
-async function enumerateFiles(root: string, excludes: string[], token: vscode.CancellationToken): Promise<string[]> {
-  const files: string[] = [];
-  const skipWithinRoot = new Set(excludes.map(e => path.resolve(root, e)));
-  async function walk(dir: string) {
-    if (token.isCancellationRequested) {return;}
-    let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const ent of entries) {
-      if (token.isCancellationRequested) {return;}
-      const p = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (skipWithinRoot.has(p)) {continue;}
-        await walk(p);
-      } else {
-        files.push(p);
-      }
-    }
+      vscode.commands.registerCommand('sec.scan', requireAuth(scanWorkspaceAndUpload)),
+      vscode.commands.registerCommand('sec.exportReport', requireAuth(() => vscode.window.showInformationMessage('Export report TODO'))),
+      vscode.commands.registerCommand('sec.toggleSeverity', requireAuth(() => vscode.window.showInformationMessage('Toggle severity TODO'))),
+      vscode.commands.registerCommand('sec.setup', async () => { await runSetupWizard(context, auth, out); })
+    );
+
+    // Live scanner (siempre activo)
+    const live = new LiveScanner({
+      configs: (cfg.get('semgrep.configs') as string[]) ?? ['p/owasp-top-ten', 'p/secrets'],
+      timeoutSec: (cfg.get('timeoutSec') as number) ?? 60,
+      onDebug: (m) => out.appendLine(m)
+    });
+    live.bind(context);
+
+    out.appendLine('[oryon] activate() done');
+  } catch (e: any) {
+    console.error('[oryon] activate() failed:', e?.message || e);
+    vscode.window.showErrorMessage('Oryon: error durante la activación. Revisa la Consola del Desarrollador.');
   }
-  await walk(root);
-  return files;
 }
 
-function defaultExcludes() {
-  return ['node_modules', 'vendor', 'tmp', 'log', 'public', 'storage', 'dist', 'build', 'coverage', '.git'];
-}
-
-async function pLimit<T>(limit: number, tasks: Array<() => Promise<T>>): Promise<void> {
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (i < tasks.length) {
-      const idx = i++;
-      await tasks[idx]();
-    }
-  });
-  await Promise.all(workers);
-}
-
-function toUIItem(
-  f: Finding,
-  extra: {
-    explanation_md: string;
-    unified_diff: string | null;
-    calibrated: 'none'|'low'|'medium'|'high'|'critical'|null;
-    confidence: number | null;
-    references: string[];
-    tests: string[];
-    cwe?: string|null;
-    owasp?: string|null;
-  }
-): UIItem {
-  return {
-    fingerprint: f.fingerprint,
-    ruleId: f.ruleId,
-    severity: f.severity,
-    file: f.file,
-    relFile: vscode.workspace.asRelativePath(f.file),
-    range: f.range,
-    message: f.message,
-    cwe: extra.cwe ?? null,
-    owasp: extra.owasp ?? null,
-    snippet: f.snippet,
-    explanation_md: extra.explanation_md,
-    unified_diff: extra.unified_diff,
-    calibrated: extra.calibrated ?? null,
-    confidence: extra.confidence ?? null,
-    references: extra.references,
-    tests: extra.tests
-  };
-}
-
-export function deactivate() {}
+export function deactivate() { clearDiagnostics(); }
